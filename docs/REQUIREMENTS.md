@@ -1,0 +1,166 @@
+# Note Taker — Android App Requirements
+
+## Overview
+
+A minimal Android app for capturing notes (typed or voice-dictated via keyboard mic) and pushing them to a GitHub repository. Notes are processed by an LLM agent in the notes repo.
+
+## System Context
+
+The app is one piece of a three-part system:
+
+1. **This app** — captures notes, pushes to GitHub
+2. **notes repo** (`ram-sharan25/notes`) — stores raw and processed notes as markdown files and does LLM processing
+3. **Processor** (separate, runs locally) — processes existing notes from signal messages
+
+The app's only job is getting text into the `inbox/` folder of the notes repo.
+
+## Core Flow
+
+1. User long-presses side key (or opens app normally)
+2. Note input screen appears immediately (over lock screen if triggered from keyguard)
+3. App fetches current sticky topic from the repo and displays it at the top
+4. User types a note (or dictates via keyboard mic button)
+5. User taps submit
+6. App creates a new file in `inbox/` via the GitHub API
+7. Input field clears, brief success animation, user stays on the same screen ready for the next note
+8. If launched from lock screen, pressing Back returns to the lock screen
+
+## Screens
+
+### 1. Note Input (Home)
+The default and only landing screen. Always opens here.
+
+- **Top bar**: current sticky topic (read-only), icon to navigate to Settings
+- **Body**: single text input field, full height available
+- **Bottom**: submit button
+- On submit: push to GitHub, clear the field, show brief success feedback (animation/snackbar), stay on this screen
+- On error: show error message (no network, auth failure, etc.)
+
+### 2. Settings
+Accessible from the top bar of the note input screen.
+
+- GitHub account — sign in / disconnect
+- Repository — shown read-only (disconnect to change)
+- Digital assistant setup — two-step guide: (1) set as default assistant with role detection, (2) set side button to use digital assistant (Samsung `SideKeySettings` intent with fallback)
+- Delete all data — wipe all local data (Room DB, DataStore, WorkManager jobs) with confirmation dialog
+
+## Functional Requirements
+
+### FR1: Note Input ✅
+- Single text input field
+- User types or uses the Android keyboard's built-in mic for voice-to-text
+- No custom speech recognition — rely entirely on the keyboard
+- Submit button to send the note
+- On submit: clear field, brief success animation, stay on same screen
+
+### FR2: Sticky Topic Display ✅
+- On app open, fetch `.current_topic` from the configured repo via GitHub API
+- Display the current topic at the top of the screen (read-only)
+- If no topic is set, display "No topic set"
+- Topic changes happen through note content (e.g., "new topic, Frankenstein"), processed by the LLM — the app does not need topic-setting UI
+
+### FR3: Push to GitHub ✅
+- On submit, create a new file in the `inbox/` directory of the configured repo
+- Use the GitHub REST API (Contents API) to create the file
+- **Filename**: ISO 8601 timestamp with local timezone (e.g., `2026-02-09T143200-0500.md`)
+- **Content**: the raw note text, nothing else
+- Handle errors gracefully (no network, auth failure, conflict)
+- Show error feedback to user
+
+### FR4: Submission History ✅
+- After each successful push, save a local record: timestamp, first ~50 characters of note text, success/failure
+- Display the last 5-10 submissions in a compact list on the note input screen (collapsible section below the input field)
+- Stored locally (SharedPreferences or Room) — not fetched from GitHub
+- Persists across app restarts
+
+### FR5: Authentication & Configuration ✅
+- **Primary: GitHub App OAuth** — "Sign in with GitHub" button launches the GitHub App installation flow:
+  1. Chrome Custom Tab opens to GitHub's App install page
+  2. User picks their GitHub account and selects a repository
+  3. GitHub redirects through a Pages bounce page (`ram-sharan25.github.io/gitjot-oauth/callback`) back to the app via `notetaker://` custom scheme
+  4. App exchanges the authorization code for an access token (PKCE-protected)
+  5. App discovers the installed repo via `/user/installations` API
+  6. Token stored in EncryptedSharedPreferences (Android Keystore-backed)
+  7. Non-expiring user tokens — no refresh logic needed
+- **Re-authentication after disconnect** — uses the standard OAuth authorize URL (not the install URL), since the GitHub App remains installed on the user's GitHub account. The app preserves the `installation_id` across disconnect to detect returning users. If the user uninstalled the app from GitHub, the stale installation is detected and the install flow is used instead. "Delete All Data" clears everything including the installation ID (factory reset).
+- **Shared prerequisite** — Fork the template notes repo on GitHub (step 1, visible above both auth methods)
+- **Fallback: Fine-grained PAT** — collapsible 4-step guided flow (AnimatedVisibility):
+  1. Enter repository as `owner/repo` or paste full GitHub URL (auto-parsed)
+  3. Generate a PAT with step-by-step instructions dialog
+  4. Paste the token (password-masked with visibility toggle)
+  5. App validates token via `GET /user` (401 → "token is invalid"), then validates repo via `GET /repos/{owner}/{repo}` (404 → "repo not found")
+- Both auth types store tokens in EncryptedSharedPreferences, metadata in DataStore
+- Settings screen shows "Connected via GitHub" or "Connected via Personal Access Token"
+- "What am I agreeing to?" link on OAuth flow explains permissions in plain language (one-repo read/write only, revocable)
+- Help `(?)` icons explain token security and repo format
+- "Need help?" link at bottom opens a YouTube setup walkthrough video
+- To change repo or rotate token: disconnect in settings and re-enter
+- OAuth disconnect revokes the access token via GitHub API (best-effort, 5s timeout) and shows a confirmation dialog explaining Note Taker stays installed on GitHub
+- Disconnect dialog warns about pending unsent notes (all auth types) in red error text; single "Disconnect" button (red) + "Cancel"
+- "Manage on GitHub" button in Settings for OAuth users opens GitHub's installation settings
+- Reactive 401/403 detection: note submit shows "Session expired" and preserves note text; browse shows "Session expired"; worker stops retrying
+- Repo selection dialog when GitHub App has access to multiple repositories
+- Two-tap OAuth hint: "Already installed Note Taker on GitHub? Tap again to continue."
+- See `docs/github-app-oauth-implementation.md` for implementation plan
+
+### FR6: Lock Screen Launch ✅
+- App registers as an Android digital assistant via `VoiceInteractionService`
+- Long-press side key launches note capture over the lock screen (no unlock required)
+- Works from both locked and unlocked states
+- See `APP-TRIGGER.md` for full implementation details
+
+### FR7: Offline Note Queuing ✅
+- Notes are always saved to a local Room queue before attempting GitHub push
+- On success, note is removed from queue and recorded in submission history
+- On failure (no network, API error), note stays queued and WorkManager schedules retry with network connectivity constraint
+- On auth failure (401/403), worker marks note as `auth_failed` and stops retrying; note submit shows "Session expired" and preserves user's text
+- Handles 422 conflict (duplicate filename) by appending suffix
+- UI shows "Queued" animation on submit failure and pending count badge
+- Count drops to 0 automatically when WorkManager succeeds in the background
+
+### FR8: Browse Notes ✅
+- Read-only repo browser accessible from the note input screen's top bar
+- Fetches repo contents via GitHub REST API (Contents API)
+- Displays folder/file tree — tap folder to navigate, tap file to view
+- Renders markdown files via Markwon, non-markdown in monospace
+- BackHandler for in-screen navigation (file → directory → parent → exit)
+- From lock screen, browse icon triggers `requestDismissKeyguard()` → opens in MainActivity
+- Empty state, error state with retry, loading indicator
+
+### FR9: Voice-First Input
+- App auto-starts speech recognition when NoteInputScreen appears (on resume)
+- Words stream into the text field in real time (partial → finalized segments)
+- Continuous listening: no timeout, auto-restarts between speech segments
+- Mode switching: tap text field → keyboard mode; tap mic button → voice mode; text preserved across switches
+- Permission denied or SpeechRecognizer unavailable → falls back to keyboard-only mode
+- Submit while listening: stops voice, submits, clears, restarts voice
+- App backgrounded: ON_PAUSE stops recognizer, ON_RESUME restarts
+- App always returns to NoteInputScreen when brought to foreground
+
+### Lock Screen Security ✅
+Two-tier model (same pattern as the camera app):
+1. **Quick capture (no auth)** — note input works over the lock screen
+2. **Full app access (auth required)** — settings requires `requestDismissKeyguard()` to prompt for biometric/PIN
+
+## Non-Functional Requirements
+
+- **Platform**: Android only, Kotlin, Jetpack Compose
+- **Min SDK**: API 29 (Android 10) — covers all Galaxy S21+ devices
+- **Target device**: Samsung Galaxy S24 Ultra (SM-S928U1), Android 16, OneUI 8.0
+- **Theme**: Dark mode only
+- **Simplicity**: Minimal UI — this is a capture tool, not a note management app
+- **Speed**: App should open and be ready to type within 1-2 seconds
+- **Security**: HTTP logging disabled in release builds, ADB backup disabled, R8 minification enabled (M20 audit), tokens encrypted at rest via EncryptedSharedPreferences (M31)
+
+## Out of Scope
+
+- Note processing, cleaning, or organization (handled by the notes repo's LLM agent)
+- Topic management UI (topics are set via note content)
+- Smarter topic refresh (see `ROADMAP.md`)
+- Web UI
+- Multi-user support
+- iOS
+
+## Open Questions
+
+(none currently)
