@@ -15,6 +15,7 @@ import androidx.navigation.compose.rememberNavController
 import com.rrimal.notetaker.data.auth.AuthManager
 import com.rrimal.notetaker.ui.screens.AuthScreen
 import com.rrimal.notetaker.ui.screens.BrowseScreen
+import com.rrimal.notetaker.ui.screens.InboxCaptureScreen
 import com.rrimal.notetaker.ui.screens.NoteInputScreen
 import com.rrimal.notetaker.ui.screens.SettingsScreen
 import kotlinx.serialization.Serializable
@@ -23,6 +24,7 @@ import kotlinx.serialization.Serializable
 @Serializable object NoteRoute
 @Serializable object SettingsRoute
 @Serializable object BrowseRoute
+@Serializable object InboxCaptureRoute
 
 @Composable
 fun AppNavGraph(
@@ -80,6 +82,9 @@ fun AppNavGraph(
                 },
                 onBrowseClick = {
                     navController.navigate(BrowseRoute)
+                },
+                onInboxCaptureClick = {
+                    navController.navigate(InboxCaptureRoute)
                 }
             )
         }
@@ -99,6 +104,12 @@ fun AppNavGraph(
             BrowseScreen(
                 onBack = { navController.popBackStack() },
                 onSettingsClick = { navController.navigate(SettingsRoute) }
+            )
+        }
+
+        composable<InboxCaptureRoute> {
+            InboxCaptureScreen(
+                onBack = { navController.popBackStack() }
             )
         }
     }

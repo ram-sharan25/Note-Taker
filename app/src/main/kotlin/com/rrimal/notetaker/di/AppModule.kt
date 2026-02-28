@@ -174,10 +174,9 @@ object AppModule {
         fileManager: LocalFileManager,
         orgParser: OrgParser,
         orgWriter: OrgWriter,
-        storageConfigManager: StorageConfigManager,
-        syncManager: GitHubSyncManager
+        storageConfigManager: StorageConfigManager
     ): LocalOrgStorageBackend {
-        return LocalOrgStorageBackend(fileManager, orgParser, orgWriter, storageConfigManager, syncManager)
+        return LocalOrgStorageBackend(fileManager, orgParser, orgWriter, storageConfigManager)
     }
 
     @Provides

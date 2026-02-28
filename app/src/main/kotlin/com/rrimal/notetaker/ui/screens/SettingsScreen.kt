@@ -44,6 +44,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.OutlinedTextField
 import com.rrimal.notetaker.data.storage.StorageMode
 import com.rrimal.notetaker.ui.theme.Blue40
 import androidx.compose.runtime.Composable
@@ -208,32 +209,72 @@ fun SettingsScreen(
                                 Text("Select Folder")
                             }
                         }
-
-                        // GitHub sync toggle
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Backup to GitHub", style = MaterialTheme.typography.bodyMedium)
-                                Text(
-                                    "Sync local files to GitHub",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Switch(
-                                checked = uiState.syncToGitHubEnabled,
-                                onCheckedChange = { viewModel.setSyncToGitHub(it) }
-                            )
-                        }
                     }
                 }
             }
 
             Spacer(modifier = Modifier.height(12.dp))
+
+            // Inbox Configuration (visible when LOCAL_ORG_FILES mode)
+            if (uiState.storageMode == StorageMode.LOCAL_ORG_FILES) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Inbox Configuration",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            "Configure where inbox TODO entries are saved when using the inbox capture feature (✓ icon)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        var inboxPath by remember { mutableStateOf(uiState.inboxFilePath) }
+
+                        LaunchedEffect(uiState.inboxFilePath) {
+                            inboxPath = uiState.inboxFilePath
+                        }
+
+                        Text(
+                            "Inbox file path:",
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                        OutlinedTextField(
+                            value = inboxPath,
+                            onValueChange = { inboxPath = it },
+                            label = { Text("File path") },
+                            placeholder = { Text("inbox.org") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            "Examples: inbox.org, Brain/inbox.org, Work/todos.org",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                            onClick = {
+                                viewModel.setInboxFilePath(inboxPath.trim())
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = inboxPath.trim().isNotEmpty()
+                        ) {
+                            Text("Save Inbox Path")
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+            }
 
             // Device Connection section
             Card(

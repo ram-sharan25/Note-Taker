@@ -26,6 +26,21 @@ interface StorageBackend {
     suspend fun fetchCurrentTopic(): String?
 
     /**
+     * Create a new file
+     */
+    suspend fun createFile(fileName: String, parentPath: String = "", content: String = ""): Result<String>
+
+    /**
+     * Create a new folder
+     */
+    suspend fun createFolder(folderName: String, parentPath: String = ""): Result<String>
+
+    /**
+     * Update file content
+     */
+    suspend fun updateFile(documentId: String, content: String): Result<Unit>
+
+    /**
      * The storage mode this backend represents
      */
     val storageMode: StorageMode
@@ -40,7 +55,9 @@ data class NoteMetadata(
     val priority: String? = null,    // A, B, C
     val scheduled: String? = null,
     val deadline: String? = null,
-    val properties: Map<String, String> = emptyMap()
+    val properties: Map<String, String> = emptyMap(),
+    val title: String? = null,       // Optional title (for inbox capture)
+    val description: String? = null  // Optional description (for inbox capture)
 )
 
 /**
@@ -68,4 +85,9 @@ enum class SubmitResult {
 enum class StorageMode {
     GITHUB_MARKDOWN,
     LOCAL_ORG_FILES
+}
+
+enum class CaptureMode {
+    NEW_FILE,       // Create a new file for each note
+    INBOX_APPEND    // Append to an inbox file
 }

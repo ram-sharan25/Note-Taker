@@ -140,4 +140,16 @@ class GitHubStorageBackend @Inject constructor(
             null
         }
     }
+
+    override suspend fun createFile(fileName: String, parentPath: String, content: String): Result<String> {
+        return Result.failure(Exception("File creation not supported in GitHub mode"))
+    }
+
+    override suspend fun createFolder(folderName: String, parentPath: String): Result<String> {
+        return Result.failure(Exception("Folder creation not supported in GitHub mode"))
+    }
+
+    override suspend fun updateFile(documentId: String, content: String): Result<Unit> {
+        return Result.failure(Exception("File editing not supported in GitHub mode"))
+    }
 }

@@ -21,7 +21,11 @@ data class BrowseUiState(
     val error: String? = null,
     val viewingFile: String? = null,
     val fileContent: String? = null,
-    val isFileLoading: Boolean = false
+    val isFileLoading: Boolean = false,
+    val isEditing: Boolean = false,
+    val isSaving: Boolean = false,
+    val showCreateFileDialog: Boolean = false,
+    val showCreateFolderDialog: Boolean = false
 )
 
 @HiltViewModel
@@ -98,6 +102,12 @@ class BrowseViewModel @Inject constructor(
     fun navigateUp(): Boolean {
         val state = _uiState.value
 
+        // If editing, exit edit mode
+        if (state.isEditing) {
+            _uiState.update { it.copy(isEditing = false) }
+            return true
+        }
+
         // If viewing a file, go back to directory
         if (state.viewingFile != null) {
             _uiState.update { it.copy(viewingFile = null, fileContent = null) }
@@ -112,5 +122,93 @@ class BrowseViewModel @Inject constructor(
         }
 
         return false
+    }
+
+    fun startEditing() {
+        _uiState.update { it.copy(isEditing = true) }
+    }
+
+    fun cancelEditing() {
+        _uiState.update { it.copy(isEditing = false) }
+    }
+
+    fun updateFileContent(newContent: String) {
+        _uiState.update { it.copy(fileContent = newContent) }
+    }
+
+    fun saveFile() {
+        val state = _uiState.value
+        val filePath = state.viewingFile ?: return
+        val content = state.fileContent ?: return
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(isSaving = true) }
+
+            val result = repository.updateFile(filePath, content)
+            result.onSuccess {
+                _uiState.update { it.copy(isEditing = false, isSaving = false) }
+            }.onFailure { e ->
+                _uiState.update {
+                    it.copy(
+                        isSaving = false,
+                        error = e.message ?: "Failed to save file"
+                    )
+                }
+            }
+        }
+    }
+
+    fun showCreateFileDialog() {
+        _uiState.update { it.copy(showCreateFileDialog = true) }
+    }
+
+    fun hideCreateFileDialog() {
+        _uiState.update { it.copy(showCreateFileDialog = false) }
+    }
+
+    fun showCreateFolderDialog() {
+        _uiState.update { it.copy(showCreateFolderDialog = true) }
+    }
+
+    fun hideCreateFolderDialog() {
+        _uiState.update { it.copy(showCreateFolderDialog = false) }
+    }
+
+    fun createFile(fileName: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, showCreateFileDialog = false) }
+
+            val result = repository.createFile(fileName, _uiState.value.currentPath)
+            result.onSuccess {
+                // Reload directory to show new file
+                loadDirectory(_uiState.value.currentPath)
+            }.onFailure { e ->
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        error = e.message ?: "Failed to create file"
+                    )
+                }
+            }
+        }
+    }
+
+    fun createFolder(folderName: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, showCreateFolderDialog = false) }
+
+            val result = repository.createFolder(folderName, _uiState.value.currentPath)
+            result.onSuccess {
+                // Reload directory to show new folder
+                loadDirectory(_uiState.value.currentPath)
+            }.onFailure { e ->
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        error = e.message ?: "Failed to create folder"
+                    )
+                }
+            }
+        }
     }
 }

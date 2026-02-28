@@ -15,6 +15,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -57,8 +58,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -107,6 +110,7 @@ private fun Modifier.verticalScrollbar(
 fun NoteInputScreen(
     onSettingsClick: () -> Unit,
     onBrowseClick: () -> Unit = {},
+    onInboxCaptureClick: () -> Unit = {},
     viewModel: NoteViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -232,7 +236,8 @@ fun NoteInputScreen(
                 topic = uiState.topic,
                 isLoading = uiState.isTopicLoading,
                 onSettingsClick = onSettingsClick,
-                onBrowseClick = onBrowseClick
+                onBrowseClick = onBrowseClick,
+                onInboxCaptureClick = onInboxCaptureClick
             )
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -329,6 +334,20 @@ fun NoteInputScreen(
                 modifier = Modifier.padding(horizontal = 16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                // Capture folder indicator
+                Text(
+                    text = if (uiState.captureFolder.isEmpty()) {
+                        "Saving to: Root folder"
+                    } else {
+                        "Saving to: ${uiState.captureFolder}/"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .padding(bottom = 8.dp)
+                        .clickable { viewModel.showCaptureFolderDialog() }
+                )
+
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth()
@@ -440,5 +459,58 @@ fun NoteInputScreen(
 
             SubmissionHistory(items = uiState.submissions)
         }
+    }
+
+    // Capture folder selector dialog
+    if (uiState.showCaptureFolderDialog) {
+        var folderPath by remember { mutableStateOf(uiState.captureFolder) }
+
+        AlertDialog(
+            onDismissRequest = { viewModel.hideCaptureFolderDialog() },
+            title = { Text("Capture Folder Location") },
+            text = {
+                Column {
+                    Text(
+                        "Each note will be saved as a separate file with timestamp name.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    Text(
+                        "Enter folder path (leave empty for root):",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    OutlinedTextField(
+                        value = folderPath,
+                        onValueChange = { folderPath = it },
+                        label = { Text("Folder path") },
+                        placeholder = { Text("Brain") },
+                        singleLine = true
+                    )
+                    Text(
+                        "Examples: (empty) = root, Brain, Work, Projects/Active",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        viewModel.setCaptureFolder(folderPath.trim())
+                    }
+                ) {
+                    Text("Set")
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = { viewModel.hideCaptureFolderDialog() }
+                ) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }

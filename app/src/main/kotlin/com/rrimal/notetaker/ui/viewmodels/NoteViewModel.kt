@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.rrimal.notetaker.data.auth.AuthManager
 import com.rrimal.notetaker.data.repository.NoteRepository
+import com.rrimal.notetaker.data.storage.StorageConfigManager
 import com.rrimal.notetaker.data.storage.SubmitResult
 import com.rrimal.notetaker.speech.ListeningState
 import com.rrimal.notetaker.speech.SpeechRecognizerManager
@@ -37,13 +38,16 @@ data class NoteUiState(
     val inputMode: InputMode = InputMode.VOICE,
     val listeningState: ListeningState = ListeningState.IDLE,
     val speechAvailable: Boolean = false,
-    val permissionGranted: Boolean = false
+    val permissionGranted: Boolean = false,
+    val captureFolder: String = "",
+    val showCaptureFolderDialog: Boolean = false
 )
 
 @HiltViewModel
 class NoteViewModel @Inject constructor(
     private val repository: NoteRepository,
     private val authManager: AuthManager,
+    private val storageConfigManager: StorageConfigManager,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -76,8 +80,17 @@ class NoteViewModel @Inject constructor(
         observeSubmissions()
         observePendingCount()
         observeSpeechState()
+        observeCaptureFile()
         fetchTopic()
         checkOnboarding()
+    }
+
+    private fun observeCaptureFile() {
+        viewModelScope.launch {
+            storageConfigManager.captureFolder.collect { captureFolder ->
+                _uiState.update { it.copy(captureFolder = captureFolder) }
+            }
+        }
     }
 
     private fun checkOnboarding() {
@@ -234,6 +247,21 @@ class NoteViewModel @Inject constructor(
                     speechManager.start()
                 }
             }
+        }
+    }
+
+    fun showCaptureFolderDialog() {
+        _uiState.update { it.copy(showCaptureFolderDialog = true) }
+    }
+
+    fun hideCaptureFolderDialog() {
+        _uiState.update { it.copy(showCaptureFolderDialog = false) }
+    }
+
+    fun setCaptureFolder(folder: String) {
+        viewModelScope.launch {
+            storageConfigManager.setCaptureFolder(folder)
+            _uiState.update { it.copy(showCaptureFolderDialog = false) }
         }
     }
 

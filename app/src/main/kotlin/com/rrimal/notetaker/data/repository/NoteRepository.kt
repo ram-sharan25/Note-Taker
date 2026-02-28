@@ -14,6 +14,7 @@ import com.rrimal.notetaker.data.storage.GitHubStorageBackend
 import com.rrimal.notetaker.data.storage.LocalOrgStorageBackend
 import com.rrimal.notetaker.data.storage.StorageBackend
 import com.rrimal.notetaker.data.storage.StorageConfigManager
+import com.rrimal.notetaker.data.storage.NoteMetadata
 import com.rrimal.notetaker.data.storage.StorageMode
 import com.rrimal.notetaker.data.storage.SubmitResult
 import com.rrimal.notetaker.data.worker.NoteUploadWorker
@@ -47,7 +48,7 @@ class NoteRepository @Inject constructor(
         }
     }
 
-    suspend fun submitNote(text: String): Result<SubmitResult> {
+    suspend fun submitNote(text: String, metadata: NoteMetadata? = null): Result<SubmitResult> {
         val backend = getCurrentBackend()
 
         // GitHub backend: queue-first approach with WorkManager retry
@@ -56,7 +57,7 @@ class NoteRepository @Inject constructor(
         }
 
         // Local backend: direct submission (handles retry internally if needed)
-        return submitNoteLocal(text)
+        return submitNoteLocal(text, metadata)
     }
 
     /**
@@ -114,9 +115,9 @@ class NoteRepository @Inject constructor(
     /**
      * Submit note using local org backend
      */
-    private suspend fun submitNoteLocal(text: String): Result<SubmitResult> {
+    private suspend fun submitNoteLocal(text: String, metadata: NoteMetadata? = null): Result<SubmitResult> {
         return try {
-            val result = localOrgBackend.submitNote(text)
+            val result = localOrgBackend.submitNote(text, metadata)
 
             if (result.isSuccess && result.getOrNull() == SubmitResult.SENT) {
                 // Record in submissions
@@ -163,6 +164,21 @@ class NoteRepository @Inject constructor(
     suspend fun fetchCurrentTopic(): String? {
         val backend = getCurrentBackend()
         return backend.fetchCurrentTopic()
+    }
+
+    suspend fun createFile(fileName: String, parentPath: String = "", content: String = ""): Result<String> {
+        val backend = getCurrentBackend()
+        return backend.createFile(fileName, parentPath, content)
+    }
+
+    suspend fun createFolder(folderName: String, parentPath: String = ""): Result<String> {
+        val backend = getCurrentBackend()
+        return backend.createFolder(folderName, parentPath)
+    }
+
+    suspend fun updateFile(documentId: String, content: String): Result<Unit> {
+        val backend = getCurrentBackend()
+        return backend.updateFile(documentId, content)
     }
 
 }

@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.filled.AddTask
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -27,7 +28,8 @@ fun TopicBar(
     topic: String?,
     isLoading: Boolean,
     onSettingsClick: () -> Unit,
-    onBrowseClick: () -> Unit = {}
+    onBrowseClick: () -> Unit = {},
+    onInboxCaptureClick: () -> Unit = {}
 ) {
     val displayText = when {
         isLoading -> "..."
@@ -56,6 +58,12 @@ fun TopicBar(
                 )
             },
             actions = {
+                IconButton(onClick = onInboxCaptureClick) {
+                    Icon(
+                        imageVector = Icons.Default.AddTask,
+                        contentDescription = "Inbox Capture"
+                    )
+                }
                 IconButton(onClick = onBrowseClick) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.MenuBook,

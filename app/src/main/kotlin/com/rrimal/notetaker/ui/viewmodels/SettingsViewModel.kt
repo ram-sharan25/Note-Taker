@@ -36,7 +36,8 @@ data class SettingsUiState(
     val installationId: String = "",
     val storageMode: StorageMode = StorageMode.GITHUB_MARKDOWN,
     val localFolderUri: String? = null,
-    val syncToGitHubEnabled: Boolean = false
+    val syncToGitHubEnabled: Boolean = false,
+    val inboxFilePath: String = "inbox.org"
 )
 
 @HiltViewModel
@@ -136,15 +137,23 @@ class SettingsViewModel @Inject constructor(
             combine(
                 storageConfigManager.storageMode,
                 storageConfigManager.localFolderUri,
-                storageConfigManager.syncToGitHubEnabled
-            ) { mode, uri, syncEnabled ->
-                Triple(mode, uri, syncEnabled)
-            }.collect { (mode, uri, syncEnabled) ->
+                storageConfigManager.syncToGitHubEnabled,
+                storageConfigManager.inboxFilePath
+            ) { mode, uri, syncEnabled, inboxFilePath ->
+                data class StorageConfig(
+                    val mode: StorageMode,
+                    val uri: String?,
+                    val syncEnabled: Boolean,
+                    val inboxFilePath: String
+                )
+                StorageConfig(mode, uri, syncEnabled, inboxFilePath)
+            }.collect { config ->
                 _uiState.update {
                     it.copy(
-                        storageMode = mode,
-                        localFolderUri = uri,
-                        syncToGitHubEnabled = syncEnabled
+                        storageMode = config.mode,
+                        localFolderUri = config.uri,
+                        syncToGitHubEnabled = config.syncEnabled,
+                        inboxFilePath = config.inboxFilePath
                     )
                 }
             }
@@ -172,6 +181,12 @@ class SettingsViewModel @Inject constructor(
     fun setSyncToGitHub(enabled: Boolean) {
         viewModelScope.launch {
             storageConfigManager.setSyncToGitHubEnabled(enabled)
+        }
+    }
+
+    fun setInboxFilePath(path: String) {
+        viewModelScope.launch {
+            storageConfigManager.setInboxFilePath(path)
         }
     }
 }

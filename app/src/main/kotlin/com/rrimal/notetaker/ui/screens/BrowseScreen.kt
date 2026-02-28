@@ -21,24 +21,39 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import com.rrimal.notetaker.ui.theme.Blue40
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
@@ -99,6 +114,44 @@ fun BrowseScreen(
                         }
                     },
                     actions = {
+                        // Show Edit/Save/Cancel buttons when viewing a file
+                        if (uiState.viewingFile != null) {
+                            if (uiState.isEditing) {
+                                // Cancel button
+                                IconButton(onClick = { viewModel.cancelEditing() }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Cancel"
+                                    )
+                                }
+                                // Save button
+                                IconButton(
+                                    onClick = { viewModel.saveFile() },
+                                    enabled = !uiState.isSaving
+                                ) {
+                                    if (uiState.isSaving) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(24.dp),
+                                            color = MaterialTheme.colorScheme.onPrimary
+                                        )
+                                    } else {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = "Save"
+                                        )
+                                    }
+                                }
+                            } else {
+                                // Edit button
+                                IconButton(onClick = { viewModel.startEditing() }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Edit,
+                                        contentDescription = "Edit"
+                                    )
+                                }
+                            }
+                        }
+                        // Settings button (always visible)
                         IconButton(onClick = onSettingsClick) {
                             Icon(
                                 imageVector = Icons.Default.Settings,
@@ -111,6 +164,44 @@ fun BrowseScreen(
                         containerColor = Blue40
                     )
                 )
+            }
+        },
+        floatingActionButton = {
+            // Only show FAB when browsing (not viewing a file)
+            if (uiState.viewingFile == null && !uiState.isLoading) {
+                var showMenu by remember { mutableStateOf(false) }
+
+                Box {
+                    FloatingActionButton(onClick = { showMenu = true }) {
+                        Icon(Icons.Default.Add, contentDescription = "Create")
+                    }
+
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("New File") },
+                            onClick = {
+                                showMenu = false
+                                viewModel.showCreateFileDialog()
+                            },
+                            leadingIcon = {
+                                Icon(Icons.Default.InsertDriveFile, contentDescription = null)
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("New Folder") },
+                            onClick = {
+                                showMenu = false
+                                viewModel.showCreateFolderDialog()
+                            },
+                            leadingIcon = {
+                                Icon(Icons.Default.CreateNewFolder, contentDescription = null)
+                            }
+                        )
+                    }
+                }
             }
         }
     ) { innerPadding ->
@@ -150,24 +241,41 @@ fun BrowseScreen(
 
                 uiState.viewingFile != null && uiState.fileContent != null -> {
                     val isMarkdown = uiState.viewingFile!!.endsWith(".md", ignoreCase = true)
-                    if (isMarkdown) {
-                        MarkdownContent(
-                            markdown = uiState.fileContent!!,
+
+                    if (uiState.isEditing) {
+                        // Editable text field
+                        TextField(
+                            value = uiState.fileContent!!,
+                            onValueChange = { viewModel.updateFileContent(it) },
                             modifier = Modifier
                                 .fillMaxSize()
-                                .verticalScroll(rememberScrollState())
-                                .padding(16.dp)
+                                .padding(16.dp),
+                            textStyle = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = FontFamily.Monospace
+                            ),
+                            placeholder = { Text("File content") }
                         )
                     } else {
-                        Text(
-                            text = uiState.fileContent!!,
-                            fontFamily = FontFamily.Monospace,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .verticalScroll(rememberScrollState())
-                                .padding(16.dp)
-                        )
+                        // Read-only view
+                        if (isMarkdown) {
+                            MarkdownContent(
+                                markdown = uiState.fileContent!!,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .verticalScroll(rememberScrollState())
+                                    .padding(16.dp)
+                            )
+                        } else {
+                            Text(
+                                text = uiState.fileContent!!,
+                                fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .verticalScroll(rememberScrollState())
+                                    .padding(16.dp)
+                            )
+                        }
                     }
                 }
 
@@ -219,5 +327,77 @@ fun BrowseScreen(
                 }
             }
         }
+    }
+
+    // Create File Dialog
+    if (uiState.showCreateFileDialog) {
+        var fileName by remember { mutableStateOf("") }
+
+        AlertDialog(
+            onDismissRequest = { viewModel.hideCreateFileDialog() },
+            title = { Text("Create New File") },
+            text = {
+                OutlinedTextField(
+                    value = fileName,
+                    onValueChange = { fileName = it },
+                    label = { Text("File name") },
+                    placeholder = { Text("example.org") },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (fileName.isNotBlank()) {
+                            viewModel.createFile(fileName.trim())
+                        }
+                    },
+                    enabled = fileName.isNotBlank()
+                ) {
+                    Text("Create")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.hideCreateFileDialog() }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Create Folder Dialog
+    if (uiState.showCreateFolderDialog) {
+        var folderName by remember { mutableStateOf("") }
+
+        AlertDialog(
+            onDismissRequest = { viewModel.hideCreateFolderDialog() },
+            title = { Text("Create New Folder") },
+            text = {
+                OutlinedTextField(
+                    value = folderName,
+                    onValueChange = { folderName = it },
+                    label = { Text("Folder name") },
+                    placeholder = { Text("My Folder") },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (folderName.isNotBlank()) {
+                            viewModel.createFolder(folderName.trim())
+                        }
+                    },
+                    enabled = folderName.isNotBlank()
+                ) {
+                    Text("Create")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.hideCreateFolderDialog() }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
