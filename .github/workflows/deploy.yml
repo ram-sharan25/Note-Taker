@@ -1,10 +1,12 @@
 name: Deploy to Google Play
 
 on:
-  push:
-    branches:
-      - staging
-      - master
+  # Automatic push triggers disabled - using manual triggers only
+  # push:
+  #   branches:
+  #     - staging
+  #     - master
+  workflow_dispatch:
 
 jobs:
   build:
