@@ -36,10 +36,15 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import com.rrimal.notetaker.data.storage.StorageMode
 import com.rrimal.notetaker.ui.theme.Blue40
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -109,6 +114,126 @@ fun SettingsScreen(
                 .padding(horizontal = 16.dp)
         ) {
             Spacer(modifier = Modifier.height(8.dp))
+
+            // Storage Mode section
+            val folderPickerLauncher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.OpenDocumentTree()
+            ) { uri ->
+                uri?.let { viewModel.onFolderSelected(it) }
+            }
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer
+                )
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Storage Mode",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // GitHub Markdown option
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = uiState.storageMode == StorageMode.GITHUB_MARKDOWN,
+                            onClick = { viewModel.setStorageMode(StorageMode.GITHUB_MARKDOWN) }
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text("GitHub Markdown", style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                "Store notes as .md files in GitHub",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Local Org Files option
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = uiState.storageMode == StorageMode.LOCAL_ORG_FILES,
+                            onClick = { viewModel.setStorageMode(StorageMode.LOCAL_ORG_FILES) }
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text("Local Org Files", style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                "Store notes as .org files locally",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    // Local folder selection (visible when LOCAL_ORG_FILES mode)
+                    if (uiState.storageMode == StorageMode.LOCAL_ORG_FILES) {
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        if (uiState.localFolderUri != null) {
+                            Text(
+                                "Folder: ${Uri.parse(uiState.localFolderUri).lastPathSegment ?: "Selected"}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedButton(
+                                onClick = { folderPickerLauncher.launch(null) },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Change Folder")
+                            }
+                        } else {
+                            Text(
+                                "No folder selected",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(
+                                onClick = { folderPickerLauncher.launch(null) },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Select Folder")
+                            }
+                        }
+
+                        // GitHub sync toggle
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Backup to GitHub", style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    "Sync local files to GitHub",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = uiState.syncToGitHubEnabled,
+                                onCheckedChange = { viewModel.setSyncToGitHub(it) }
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
 
             // Device Connection section
             Card(

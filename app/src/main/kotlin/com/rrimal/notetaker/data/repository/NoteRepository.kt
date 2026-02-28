@@ -1,34 +1,35 @@
 package com.rrimal.notetaker.data.repository
 
-import android.util.Base64
 import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
-import com.rrimal.notetaker.data.api.CreateFileRequest
-import com.rrimal.notetaker.data.api.GitHubApi
-import com.rrimal.notetaker.data.api.GitHubDirectoryEntry
-import com.rrimal.notetaker.data.auth.AuthManager
 import com.rrimal.notetaker.data.local.PendingNoteDao
 import com.rrimal.notetaker.data.local.PendingNoteEntity
 import com.rrimal.notetaker.data.local.SubmissionDao
 import com.rrimal.notetaker.data.local.SubmissionEntity
+import com.rrimal.notetaker.data.storage.FileEntry
+import com.rrimal.notetaker.data.storage.GitHubStorageBackend
+import com.rrimal.notetaker.data.storage.LocalOrgStorageBackend
+import com.rrimal.notetaker.data.storage.StorageBackend
+import com.rrimal.notetaker.data.storage.StorageConfigManager
+import com.rrimal.notetaker.data.storage.StorageMode
+import com.rrimal.notetaker.data.storage.SubmitResult
 import com.rrimal.notetaker.data.worker.NoteUploadWorker
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
-import retrofit2.HttpException
+import kotlinx.coroutines.flow.map
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import javax.inject.Inject
 import javax.inject.Singleton
 
-enum class SubmitResult { SENT, QUEUED, AUTH_FAILED }
-
 @Singleton
 class NoteRepository @Inject constructor(
-    private val api: GitHubApi,
-    private val authManager: AuthManager,
+    private val githubBackend: GitHubStorageBackend,
+    private val localOrgBackend: LocalOrgStorageBackend,
+    private val storageConfigManager: StorageConfigManager,
     private val submissionDao: SubmissionDao,
     private val pendingNoteDao: PendingNoteDao,
     private val workManager: WorkManager
@@ -36,7 +37,32 @@ class NoteRepository @Inject constructor(
     val recentSubmissions: Flow<List<SubmissionEntity>> = submissionDao.getRecent()
     val pendingCount: Flow<Int> = pendingNoteDao.getPendingCount()
 
+    /**
+     * Get the current storage backend based on configuration
+     */
+    private suspend fun getCurrentBackend(): StorageBackend {
+        return when (storageConfigManager.storageMode.first()) {
+            StorageMode.GITHUB_MARKDOWN -> githubBackend
+            StorageMode.LOCAL_ORG_FILES -> localOrgBackend
+        }
+    }
+
     suspend fun submitNote(text: String): Result<SubmitResult> {
+        val backend = getCurrentBackend()
+
+        // GitHub backend: queue-first approach with WorkManager retry
+        if (backend.storageMode == StorageMode.GITHUB_MARKDOWN) {
+            return submitNoteGitHub(text)
+        }
+
+        // Local backend: direct submission (handles retry internally if needed)
+        return submitNoteLocal(text)
+    }
+
+    /**
+     * Submit note using GitHub backend with queue-first approach
+     */
+    private suspend fun submitNoteGitHub(text: String): Result<SubmitResult> {
         val now = ZonedDateTime.now()
         val filename = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HHmmssZ"))
 
@@ -50,47 +76,62 @@ class NoteRepository @Inject constructor(
         )
 
         return try {
-            val token = authManager.accessToken.first()
-                ?: throw Exception("Not authenticated")
-            val owner = authManager.repoOwner.first()
-                ?: throw Exception("No repo configured")
-            val repo = authManager.repoName.first()
-                ?: throw Exception("No repo configured")
+            val result = githubBackend.submitNote(text)
 
-            val path = "inbox/$filename.md"
-            val content = Base64.encodeToString(text.toByteArray(), Base64.NO_WRAP)
-
-            api.createFile(
-                auth = "Bearer $token",
-                owner = owner,
-                repo = repo,
-                path = path,
-                request = CreateFileRequest(
-                    message = "Add note $filename",
-                    content = content
-                )
-            )
-
-            // Success — record in submissions and remove from queue
-            submissionDao.insert(
-                SubmissionEntity(
-                    timestamp = System.currentTimeMillis(),
-                    preview = text.take(50),
-                    success = true
-                )
-            )
-            pendingNoteDao.delete(noteId)
-
-            Result.success(SubmitResult.SENT)
-        } catch (e: Exception) {
-            if (e is HttpException && (e.code() == 401 || e.code() == 403)) {
-                // Auth failure — delete the pending note and report to UI
-                pendingNoteDao.delete(noteId)
-                return Result.success(SubmitResult.AUTH_FAILED)
+            if (result.isSuccess) {
+                when (result.getOrNull()) {
+                    SubmitResult.SENT -> {
+                        // Success — record in submissions and remove from queue
+                        submissionDao.insert(
+                            SubmissionEntity(
+                                timestamp = System.currentTimeMillis(),
+                                preview = text.take(50),
+                                success = true
+                            )
+                        )
+                        pendingNoteDao.delete(noteId)
+                    }
+                    SubmitResult.AUTH_FAILED -> {
+                        // Auth failure — delete the pending note
+                        pendingNoteDao.delete(noteId)
+                    }
+                    else -> {}
+                }
+            } else {
+                // Other failure — schedule WorkManager retry
+                scheduleRetry()
+                return Result.success(SubmitResult.QUEUED)
             }
-            // Other failure — schedule WorkManager retry
+
+            result
+        } catch (e: Exception) {
+            // Failure — schedule WorkManager retry
             scheduleRetry()
             Result.success(SubmitResult.QUEUED)
+        }
+    }
+
+    /**
+     * Submit note using local org backend
+     */
+    private suspend fun submitNoteLocal(text: String): Result<SubmitResult> {
+        return try {
+            val result = localOrgBackend.submitNote(text)
+
+            if (result.isSuccess && result.getOrNull() == SubmitResult.SENT) {
+                // Record in submissions
+                submissionDao.insert(
+                    SubmissionEntity(
+                        timestamp = System.currentTimeMillis(),
+                        preview = text.take(50),
+                        success = true
+                    )
+                )
+            }
+
+            result
+        } catch (e: Exception) {
+            Result.failure(e)
         }
     }
 
@@ -109,74 +150,19 @@ class NoteRepository @Inject constructor(
         )
     }
 
-    suspend fun fetchDirectoryContents(path: String): Result<List<GitHubDirectoryEntry>> {
-        return try {
-            val token = authManager.accessToken.first()
-                ?: return Result.failure(Exception("Not authenticated"))
-            val owner = authManager.repoOwner.first()
-                ?: return Result.failure(Exception("No repo configured"))
-            val repo = authManager.repoName.first()
-                ?: return Result.failure(Exception("No repo configured"))
-
-            val entries = if (path.isEmpty()) {
-                api.getRootContents(auth = "Bearer $token", owner = owner, repo = repo)
-            } else {
-                api.getDirectoryContents(auth = "Bearer $token", owner = owner, repo = repo, path = path)
-            }
-
-            // Sort: dirs first, then alphabetical
-            val sorted = entries.sortedWith(compareBy<GitHubDirectoryEntry> { it.type != "dir" }.thenBy { it.name })
-            Result.success(sorted)
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
+    suspend fun fetchDirectoryContents(path: String): Result<List<FileEntry>> {
+        val backend = getCurrentBackend()
+        return backend.fetchDirectoryContents(path)
     }
 
     suspend fun fetchFileContent(path: String): Result<String> {
-        return try {
-            val token = authManager.accessToken.first()
-                ?: return Result.failure(Exception("Not authenticated"))
-            val owner = authManager.repoOwner.first()
-                ?: return Result.failure(Exception("No repo configured"))
-            val repo = authManager.repoName.first()
-                ?: return Result.failure(Exception("No repo configured"))
-
-            val response = api.getFileContent(
-                auth = "Bearer $token",
-                owner = owner,
-                repo = repo,
-                path = path
-            )
-
-            val decoded = response.content?.let { encoded ->
-                String(Base64.decode(encoded.replace("\n", ""), Base64.DEFAULT))
-            } ?: ""
-
-            Result.success(decoded)
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
+        val backend = getCurrentBackend()
+        return backend.fetchFileContent(path)
     }
 
     suspend fun fetchCurrentTopic(): String? {
-        return try {
-            val token = authManager.accessToken.first() ?: return null
-            val owner = authManager.repoOwner.first() ?: return null
-            val repo = authManager.repoName.first() ?: return null
-
-            val response = api.getFileContent(
-                auth = "Bearer $token",
-                owner = owner,
-                repo = repo,
-                path = ".current_topic"
-            )
-
-            response.content?.let { encoded ->
-                String(Base64.decode(encoded.replace("\n", ""), Base64.DEFAULT)).trim()
-            }
-        } catch (_: Exception) {
-            null
-        }
+        val backend = getCurrentBackend()
+        return backend.fetchCurrentTopic()
     }
 
 }

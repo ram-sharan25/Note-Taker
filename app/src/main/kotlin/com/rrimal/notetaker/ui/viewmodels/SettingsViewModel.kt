@@ -2,7 +2,9 @@ package com.rrimal.notetaker.ui.viewmodels
 
 import android.app.role.RoleManager
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.work.WorkManager
@@ -10,6 +12,8 @@ import com.rrimal.notetaker.data.auth.AuthManager
 import com.rrimal.notetaker.data.auth.OAuthTokenExchanger
 import com.rrimal.notetaker.data.local.PendingNoteDao
 import com.rrimal.notetaker.data.local.SubmissionDao
+import com.rrimal.notetaker.data.storage.StorageConfigManager
+import com.rrimal.notetaker.data.storage.StorageMode
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -29,7 +33,10 @@ data class SettingsUiState(
     val authType: String = "", // "pat", "oauth", or ""
     val isSigningOut: Boolean = false,
     val pendingCount: Int = 0,
-    val installationId: String = ""
+    val installationId: String = "",
+    val storageMode: StorageMode = StorageMode.GITHUB_MARKDOWN,
+    val localFolderUri: String? = null,
+    val syncToGitHubEnabled: Boolean = false
 )
 
 @HiltViewModel
@@ -40,7 +47,8 @@ class SettingsViewModel @Inject constructor(
     private val encryptedPrefs: SharedPreferences,
     private val submissionDao: SubmissionDao,
     private val pendingNoteDao: PendingNoteDao,
-    private val workManager: WorkManager
+    private val workManager: WorkManager,
+    private val storageConfigManager: StorageConfigManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SettingsUiState())
@@ -49,6 +57,7 @@ class SettingsViewModel @Inject constructor(
     init {
         observeAuth()
         observePendingCount()
+        observeStorageConfig()
         checkAssistantRole()
     }
 
@@ -119,6 +128,50 @@ class SettingsViewModel @Inject constructor(
         val token = encryptedPrefs.getString("access_token", null) ?: return
         withTimeoutOrNull(5_000L) {
             oAuthTokenExchanger.revokeToken(token)
+        }
+    }
+
+    private fun observeStorageConfig() {
+        viewModelScope.launch {
+            combine(
+                storageConfigManager.storageMode,
+                storageConfigManager.localFolderUri,
+                storageConfigManager.syncToGitHubEnabled
+            ) { mode, uri, syncEnabled ->
+                Triple(mode, uri, syncEnabled)
+            }.collect { (mode, uri, syncEnabled) ->
+                _uiState.update {
+                    it.copy(
+                        storageMode = mode,
+                        localFolderUri = uri,
+                        syncToGitHubEnabled = syncEnabled
+                    )
+                }
+            }
+        }
+    }
+
+    fun setStorageMode(mode: StorageMode) {
+        viewModelScope.launch {
+            storageConfigManager.setStorageMode(mode)
+        }
+    }
+
+    fun onFolderSelected(uri: Uri) {
+        viewModelScope.launch {
+            // Request persistent permission
+            val takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            context.contentResolver.takePersistableUriPermission(uri, takeFlags)
+
+            // Save to config
+            storageConfigManager.setLocalFolderUri(uri.toString())
+        }
+    }
+
+    fun setSyncToGitHub(enabled: Boolean) {
+        viewModelScope.launch {
+            storageConfigManager.setSyncToGitHubEnabled(enabled)
         }
     }
 }

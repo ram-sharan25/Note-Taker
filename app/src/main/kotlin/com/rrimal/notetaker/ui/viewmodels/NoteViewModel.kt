@@ -5,7 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.rrimal.notetaker.data.auth.AuthManager
 import com.rrimal.notetaker.data.repository.NoteRepository
-import com.rrimal.notetaker.data.repository.SubmitResult
+import com.rrimal.notetaker.data.storage.SubmitResult
 import com.rrimal.notetaker.speech.ListeningState
 import com.rrimal.notetaker.speech.SpeechRecognizerManager
 import com.rrimal.notetaker.ui.components.SubmissionItem

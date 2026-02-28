@@ -2,7 +2,7 @@ package com.rrimal.notetaker.ui.viewmodels
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.rrimal.notetaker.data.api.GitHubDirectoryEntry
+import com.rrimal.notetaker.data.storage.FileEntry
 import com.rrimal.notetaker.data.repository.NoteRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import retrofit2.HttpException
@@ -16,7 +16,7 @@ import javax.inject.Inject
 data class BrowseUiState(
     val currentPath: String = "",
     val pathSegments: List<String> = emptyList(),
-    val entries: List<GitHubDirectoryEntry> = emptyList(),
+    val entries: List<FileEntry> = emptyList(),
     val isLoading: Boolean = false,
     val error: String? = null,
     val viewingFile: String? = null,

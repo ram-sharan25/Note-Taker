@@ -187,7 +187,7 @@ fun BrowseScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        if (entry.type == "dir") {
+                                        if (entry.type == com.rrimal.notetaker.data.storage.FileType.DIRECTORY) {
                                             viewModel.loadDirectory(entry.path)
                                         } else {
                                             viewModel.openFile(entry.path)
@@ -197,10 +197,10 @@ fun BrowseScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Icon(
-                                    imageVector = if (entry.type == "dir") Icons.Default.Folder else Icons.Default.Description,
+                                    imageVector = if (entry.type == com.rrimal.notetaker.data.storage.FileType.DIRECTORY) Icons.Default.Folder else Icons.Default.Description,
                                     contentDescription = null,
                                     modifier = Modifier.size(24.dp),
-                                    tint = if (entry.type == "dir")
+                                    tint = if (entry.type == com.rrimal.notetaker.data.storage.FileType.DIRECTORY)
                                         MaterialTheme.colorScheme.primary
                                     else
                                         MaterialTheme.colorScheme.onSurfaceVariant
