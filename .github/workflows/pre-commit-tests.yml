@@ -1,0 +1,169 @@
+name: Pre-Commit Tests
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  # ============================================================================
+  # QUICK VALIDATION - Fast feedback for PR authors
+  # ============================================================================
+  quick-validation:
+    name: Quick Validation (Critical Tests Only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for better analysis
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Grant execute permission
+        run: chmod +x gradlew
+
+      - name: Run Critical Tests
+        run: |
+          echo "🔍 Running critical tests to catch conflict regressions..."
+          ./gradlew testCritical --stacktrace
+
+      - name: Check for Known Issues
+        run: |
+          echo "🔎 Checking for hardcoded paths..."
+          if grep -r "phone_inbox/agenda.org" app/src/main/kotlin/ --exclude-dir=test; then
+            echo "❌ Found hardcoded path 'phone_inbox/agenda.org'"
+            echo "   Replace with agendaConfigManager.agendaFiles"
+            exit 1
+          fi
+          echo "✅ No hardcoded paths found"
+
+      - name: PR Comment - Test Results
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const testResult = '${{ job.status }}' === 'success' ? '✅ PASSED' : '❌ FAILED';
+            const body = `## 🧪 Quick Validation Results
+
+            **Critical Tests**: ${testResult}
+
+            ${testResult === '❌ FAILED' ?
+              '### ❌ Action Required\n\nTests failed. Please:\n1. Run `./run-tests.sh critical` locally\n2. Fix failures (see CONFLICTS_AND_ISSUES.md)\n3. Push fixes\n\n' :
+              '### ✅ Tests Passed\n\nYour changes look good! Full test suite will run on merge.\n'}
+
+            <details>
+            <summary>What was tested?</summary>
+
+            - ✓ Agenda uses Repository (not ViewModel)
+            - ✓ User config respected (no hardcoded paths)
+            - ✓ Recurring tasks expand correctly
+            - ✓ No hardcoded "phone_inbox/agenda.org" in code
+
+            </details>
+            `;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+  # ============================================================================
+  # LINT CHECK - Code quality
+  # ============================================================================
+  lint:
+    name: Lint Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Grant execute permission
+        run: chmod +x gradlew
+
+      - name: Run Lint
+        run: ./gradlew lintDebug --stacktrace
+
+      - name: Upload Lint Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-results
+          path: app/build/reports/lint-results-debug.html
+          retention-days: 14
+
+  # ============================================================================
+  # CHANGED FILES ANALYSIS - Only run relevant tests
+  # ============================================================================
+  smart-testing:
+    name: Smart Testing (Changed Files Only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Grant execute permission
+        run: chmod +x gradlew
+
+      - name: Detect Changed Files
+        id: changes
+        run: |
+          # Get list of changed Kotlin files
+          CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD | grep "\.kt$" || true)
+
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+
+          # Determine which tests to run
+          if echo "$CHANGED_FILES" | grep -q "AgendaRepository\|AgendaViewModel"; then
+            echo "agenda_changed=true" >> $GITHUB_OUTPUT
+          fi
+
+          if echo "$CHANGED_FILES" | grep -q "OrgParser\|OrgTimestampParser"; then
+            echo "orgmode_changed=true" >> $GITHUB_OUTPUT
+          fi
+
+          if echo "$CHANGED_FILES" | grep -q "NoteRepository\|NoteViewModel"; then
+            echo "notes_changed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run Agenda Tests
+        if: steps.changes.outputs.agenda_changed == 'true'
+        run: ./gradlew testDebugUnitTest --tests '*Agenda*' --stacktrace
+
+      - name: Run Org-Mode Tests
+        if: steps.changes.outputs.orgmode_changed == 'true'
+        run: ./gradlew testDebugUnitTest --tests '*Org*' --stacktrace
+
+      - name: Run Note Tests
+        if: steps.changes.outputs.notes_changed == 'true'
+        run: ./gradlew testDebugUnitTest --tests '*Note*' --stacktrace

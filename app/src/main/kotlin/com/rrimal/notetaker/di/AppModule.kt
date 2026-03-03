@@ -7,6 +7,7 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKeys
 import com.rrimal.notetaker.data.api.GitHubApi
 import com.rrimal.notetaker.data.api.GitHubInstallationApi
+import com.rrimal.notetaker.data.api.TogglApi
 import com.rrimal.notetaker.data.local.AppDatabase
 import com.rrimal.notetaker.data.local.PendingNoteDao
 import com.rrimal.notetaker.data.local.SubmissionDao
@@ -31,7 +32,16 @@ import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import com.rrimal.notetaker.BuildConfig
+import javax.inject.Qualifier
 import javax.inject.Singleton
+
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class GitHubRetrofit
+
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class TogglRetrofit
 
 @Module
 @InstallIn(SingletonComponent::class)
@@ -57,6 +67,7 @@ object AppModule {
     fun provideJson(): Json = Json {
         ignoreUnknownKeys = true
         isLenient = true
+        encodeDefaults = true // Encode fields with default values (required for Toggl API)
     }
 
     @Provides
@@ -76,7 +87,8 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideRetrofit(client: OkHttpClient, json: Json): Retrofit {
+    @GitHubRetrofit
+    fun provideGitHubRetrofit(client: OkHttpClient, json: Json): Retrofit {
         return Retrofit.Builder()
             .baseUrl("https://api.github.com/")
             .client(client)
@@ -86,14 +98,31 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideGitHubApi(retrofit: Retrofit): GitHubApi {
+    fun provideGitHubApi(@GitHubRetrofit retrofit: Retrofit): GitHubApi {
         return retrofit.create(GitHubApi::class.java)
     }
 
     @Provides
     @Singleton
-    fun provideGitHubInstallationApi(retrofit: Retrofit): GitHubInstallationApi {
+    fun provideGitHubInstallationApi(@GitHubRetrofit retrofit: Retrofit): GitHubInstallationApi {
         return retrofit.create(GitHubInstallationApi::class.java)
+    }
+
+    @Provides
+    @Singleton
+    @TogglRetrofit
+    fun provideTogglRetrofit(client: OkHttpClient, json: Json): Retrofit {
+        return Retrofit.Builder()
+            .baseUrl("https://api.track.toggl.com/api/v9/")
+            .client(client)
+            .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
+            .build()
+    }
+
+    @Provides
+    @Singleton
+    fun provideTogglApi(@TogglRetrofit retrofit: Retrofit): TogglApi {
+        return retrofit.create(TogglApi::class.java)
     }
 
     @Provides
@@ -104,7 +133,13 @@ object AppModule {
             AppDatabase::class.java,
             "notetaker.db"
         )
-            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3)
+            .addMigrations(
+                AppDatabase.MIGRATION_1_2,
+                AppDatabase.MIGRATION_2_3,
+                AppDatabase.MIGRATION_3_4,
+                AppDatabase.MIGRATION_4_5,
+                AppDatabase.MIGRATION_5_6
+            )
             .build()
     }
 
@@ -124,6 +159,36 @@ object AppModule {
     }
 
     @Provides
+    fun provideNoteDao(db: AppDatabase): com.rrimal.notetaker.data.local.NoteDao {
+        return db.noteDao()
+    }
+
+    @Provides
+    fun provideOrgTimestampDao(db: AppDatabase): com.rrimal.notetaker.data.local.OrgTimestampDao {
+        return db.orgTimestampDao()
+    }
+
+    @Provides
+    fun provideNotePlanningDao(db: AppDatabase): com.rrimal.notetaker.data.local.NotePlanningDao {
+        return db.notePlanningDao()
+    }
+
+    @Provides
+    fun provideFileMetadataDao(db: AppDatabase): com.rrimal.notetaker.data.local.FileMetadataDao {
+        return db.fileMetadataDao()
+    }
+
+    @Provides
+    fun provideTodoKeywordsDao(db: AppDatabase): com.rrimal.notetaker.data.local.TodoKeywordsDao {
+        return db.todoKeywordsDao()
+    }
+
+    @Provides
+    fun providePomodoroHistoryDao(db: AppDatabase): com.rrimal.notetaker.data.local.PomodoroHistoryDao {
+        return db.pomodoroHistoryDao()
+    }
+
+    @Provides
     @Singleton
     fun provideStorageConfigManager(@ApplicationContext context: Context): StorageConfigManager {
         return StorageConfigManager(context)
@@ -131,8 +196,20 @@ object AppModule {
 
     @Provides
     @Singleton
+    fun provideAgendaConfigManager(@ApplicationContext context: Context): com.rrimal.notetaker.data.preferences.AgendaConfigManager {
+        return com.rrimal.notetaker.data.preferences.AgendaConfigManager(context)
+    }
+
+    @Provides
+    @Singleton
     fun provideOrgParser(): OrgParser {
         return OrgParser()
+    }
+
+    @Provides
+    @Singleton
+    fun provideOrgTimestampParser(): com.rrimal.notetaker.data.orgmode.OrgTimestampParser {
+        return com.rrimal.notetaker.data.orgmode.OrgTimestampParser()
     }
 
     @Provides

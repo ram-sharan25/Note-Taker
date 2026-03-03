@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.TextFieldLineLimits
@@ -52,6 +53,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -79,6 +81,7 @@ import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import com.rrimal.notetaker.data.preferences.LanguagePreferenceManager
 import com.rrimal.notetaker.speech.ListeningState
 import com.rrimal.notetaker.ui.components.SubmissionHistory
 import com.rrimal.notetaker.ui.components.TopicBar
@@ -111,7 +114,9 @@ fun NoteInputScreen(
     onSettingsClick: () -> Unit,
     onBrowseClick: () -> Unit = {},
     onInboxCaptureClick: () -> Unit = {},
-    viewModel: NoteViewModel = hiltViewModel()
+    onAgendaClick: () -> Unit = {},
+    viewModel: NoteViewModel = hiltViewModel(),
+    inPager: Boolean = false // When true, voice control is handled by MainScreen
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val showOnboarding by viewModel.showOnboarding.collectAsState()
@@ -198,14 +203,17 @@ fun NoteInputScreen(
     }
 
     // Auto-start voice on resume, stop on pause
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
-        if (uiState.inputMode == InputMode.VOICE && uiState.permissionGranted && uiState.speechAvailable) {
-            viewModel.startVoiceInput()
+    // Skip if in pager (MainScreen handles voice control)
+    if (!inPager) {
+        LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+            if (uiState.inputMode == InputMode.VOICE && uiState.permissionGranted && uiState.speechAvailable) {
+                viewModel.startVoiceInput()
+            }
         }
-    }
 
-    LifecycleEventEffect(Lifecycle.Event.ON_PAUSE) {
-        viewModel.stopVoiceInput()
+        LifecycleEventEffect(Lifecycle.Event.ON_PAUSE) {
+            viewModel.stopVoiceInput()
+        }
     }
 
     LaunchedEffect(uiState.submitSuccess) {
@@ -237,7 +245,8 @@ fun NoteInputScreen(
                 isLoading = uiState.isTopicLoading,
                 onSettingsClick = onSettingsClick,
                 onBrowseClick = onBrowseClick,
-                onInboxCaptureClick = onInboxCaptureClick
+                onInboxCaptureClick = onInboxCaptureClick,
+                onAgendaClick = onAgendaClick
             )
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -299,7 +308,9 @@ fun NoteInputScreen(
                     if (uiState.inputMode == InputMode.VOICE) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(top = 8.dp)
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp)
                         ) {
                             Icon(
                                 imageVector = if (uiState.listeningState == ListeningState.LISTENING)
@@ -322,6 +333,36 @@ fun NoteInputScreen(
                                     MaterialTheme.colorScheme.primary
                                 else MaterialTheme.colorScheme.onSurfaceVariant
                             )
+
+                            Spacer(modifier = Modifier.weight(1f))
+
+                            // Language toggle chip
+                            Surface(
+                                onClick = { viewModel.toggleLanguage() },
+                                shape = RoundedCornerShape(16.dp),
+                                color = MaterialTheme.colorScheme.secondaryContainer,
+                                modifier = Modifier.padding(start = 8.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                ) {
+                                    val (flag, label) = when (uiState.currentLanguage) {
+                                        LanguagePreferenceManager.LANGUAGE_NEPALI -> "🇳🇵" to "Nepali"
+                                        else -> "🇺🇸" to "English"
+                                    }
+                                    Text(
+                                        text = flag,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = label,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -334,20 +375,6 @@ fun NoteInputScreen(
                 modifier = Modifier.padding(horizontal = 16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Capture folder indicator
-                Text(
-                    text = if (uiState.captureFolder.isEmpty()) {
-                        "Saving to: Root folder"
-                    } else {
-                        "Saving to: ${uiState.captureFolder}/"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .padding(bottom = 8.dp)
-                        .clickable { viewModel.showCaptureFolderDialog() }
-                )
-
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth()
@@ -428,19 +455,39 @@ fun NoteInputScreen(
                         && uiState.speechAvailable
                     ) {
                         Spacer(modifier = Modifier.width(8.dp))
-                        IconButton(
-                            onClick = {
-                                focusManager.clearFocus()
-                                viewModel.startVoiceInput()
-                            },
-                            modifier = Modifier.size(72.dp)
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Mic,
-                                contentDescription = "Switch to voice input",
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(28.dp)
-                            )
+                            IconButton(
+                                onClick = {
+                                    focusManager.clearFocus()
+                                    viewModel.startVoiceInput()
+                                },
+                                modifier = Modifier.size(72.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Mic,
+                                    contentDescription = "Switch to voice input",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                            }
+                            // Language indicator
+                            Surface(
+                                onClick = { viewModel.toggleLanguage() },
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.secondaryContainer
+                            ) {
+                                val flag = when (uiState.currentLanguage) {
+                                    LanguagePreferenceManager.LANGUAGE_NEPALI -> "🇳🇵"
+                                    else -> "🇺🇸"
+                                }
+                                Text(
+                                    text = flag,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -459,58 +506,5 @@ fun NoteInputScreen(
 
             SubmissionHistory(items = uiState.submissions)
         }
-    }
-
-    // Capture folder selector dialog
-    if (uiState.showCaptureFolderDialog) {
-        var folderPath by remember { mutableStateOf(uiState.captureFolder) }
-
-        AlertDialog(
-            onDismissRequest = { viewModel.hideCaptureFolderDialog() },
-            title = { Text("Capture Folder Location") },
-            text = {
-                Column {
-                    Text(
-                        "Each note will be saved as a separate file with timestamp name.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
-                    Text(
-                        "Enter folder path (leave empty for root):",
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
-                    OutlinedTextField(
-                        value = folderPath,
-                        onValueChange = { folderPath = it },
-                        label = { Text("Folder path") },
-                        placeholder = { Text("Brain") },
-                        singleLine = true
-                    )
-                    Text(
-                        "Examples: (empty) = root, Brain, Work, Projects/Active",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
-                }
-            },
-            confirmButton = {
-                androidx.compose.material3.TextButton(
-                    onClick = {
-                        viewModel.setCaptureFolder(folderPath.trim())
-                    }
-                ) {
-                    Text("Set")
-                }
-            },
-            dismissButton = {
-                androidx.compose.material3.TextButton(
-                    onClick = { viewModel.hideCaptureFolderDialog() }
-                ) {
-                    Text("Cancel")
-                }
-            }
-        )
     }
 }

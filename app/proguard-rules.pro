@@ -34,3 +34,11 @@
 -keep class com.google.crypto.tink.** { *; }
 -dontwarn com.google.errorprone.annotations.**
 -dontwarn javax.annotation.**
+
+# Pomodoro Timer
+-keep class com.rrimal.notetaker.pomodoro.PomodoroTimerService { *; }
+-keep class com.rrimal.notetaker.pomodoro.PomodoroTimerState { *; }
+-keep class com.rrimal.notetaker.pomodoro.PomodoroServiceEvent { *; }
+-keep class com.rrimal.notetaker.data.preferences.PomodoroPreferencesManager { *; }
+-keep class com.rrimal.notetaker.data.local.PomodoroHistoryEntity { *; }
+-keep class com.rrimal.notetaker.data.local.PomodoroHistoryDao { *; }

@@ -4,7 +4,9 @@ package com.rrimal.notetaker.data.orgmode
  * Parser for org-mode files with full org-mode support
  */
 class OrgParser {
-    private val headlineRegex = Regex("""^(\*+)\s+(TODO|DONE|WAITING|CANCELLED|IN-PROGRESS)?\s*(?:\[#([ABC])\])?\s*(.*?)(?:\s+(:[^\s:]+(?::[^\s:]+)*:))?\s*$""")
+    // Match common org-mode TODO keywords including HOLD
+    // This regex should be kept in sync with TodoKeywordsConfigEntity default sequence
+    private val headlineRegex = Regex("""^(\*+)\s+(TODO|DONE|WAITING|CANCELLED|IN-PROGRESS|HOLD)?\s*(?:\[#([ABC])\])?\s*(.*?)(?:\s+(:[^\s:]+(?::[^\s:]+)*:))?\s*$""")
     private val propertyDrawerStartRegex = Regex("""^\s*:PROPERTIES:\s*$""")
     private val propertyDrawerEndRegex = Regex("""^\s*:END:\s*$""")
     private val propertyLineRegex = Regex("""^\s*:([^:]+):\s*(.*)$""")

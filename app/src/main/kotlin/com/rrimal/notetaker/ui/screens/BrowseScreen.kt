@@ -62,6 +62,8 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.rrimal.notetaker.ui.components.MarkdownContent
 import com.rrimal.notetaker.ui.viewmodels.BrowseViewModel
+import com.rrimal.notetaker.data.orgmode.OrgParser
+import com.rrimal.notetaker.ui.orgview.OrgFileView
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -241,6 +243,7 @@ fun BrowseScreen(
 
                 uiState.viewingFile != null && uiState.fileContent != null -> {
                     val isMarkdown = uiState.viewingFile!!.endsWith(".md", ignoreCase = true)
+                    val isOrgFile = uiState.viewingFile!!.endsWith(".org", ignoreCase = true)
 
                     if (uiState.isEditing) {
                         // Editable text field
@@ -257,24 +260,38 @@ fun BrowseScreen(
                         )
                     } else {
                         // Read-only view
-                        if (isMarkdown) {
-                            MarkdownContent(
-                                markdown = uiState.fileContent!!,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .verticalScroll(rememberScrollState())
-                                    .padding(16.dp)
-                            )
-                        } else {
-                            Text(
-                                text = uiState.fileContent!!,
-                                fontFamily = FontFamily.Monospace,
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .verticalScroll(rememberScrollState())
-                                    .padding(16.dp)
-                            )
+                        when {
+                            isMarkdown -> {
+                                MarkdownContent(
+                                    markdown = uiState.fileContent!!,
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .verticalScroll(rememberScrollState())
+                                        .padding(16.dp)
+                                )
+                            }
+                            isOrgFile -> {
+                                val orgFile = remember(uiState.fileContent) {
+                                    OrgParser().parse(uiState.fileContent!!)
+                                }
+                                OrgFileView(
+                                    orgFile = orgFile,
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(horizontal = 8.dp)
+                                )
+                            }
+                            else -> {
+                                Text(
+                                    text = uiState.fileContent!!,
+                                    fontFamily = FontFamily.Monospace,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .verticalScroll(rememberScrollState())
+                                        .padding(16.dp)
+                                )
+                            }
                         }
                     }
                 }

@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.rrimal.notetaker.data.auth.AuthManager
+import com.rrimal.notetaker.data.preferences.LanguagePreferenceManager
 import com.rrimal.notetaker.data.repository.NoteRepository
 import com.rrimal.notetaker.data.storage.StorageConfigManager
 import com.rrimal.notetaker.data.storage.SubmitResult
@@ -25,6 +26,14 @@ import javax.inject.Inject
 
 enum class InputMode { VOICE, KEYBOARD }
 
+enum class CaptureType {
+    NOTE,       // Default - plain text
+    LINK,       // URL/link
+    CHECKLIST,  // Checkbox items
+    BULLET,     // Bullet list
+    TODO        // Todo/task
+}
+
 data class NoteUiState(
     val noteText: String = "",
     val topic: String? = null,
@@ -39,8 +48,8 @@ data class NoteUiState(
     val listeningState: ListeningState = ListeningState.IDLE,
     val speechAvailable: Boolean = false,
     val permissionGranted: Boolean = false,
-    val captureFolder: String = "",
-    val showCaptureFolderDialog: Boolean = false
+    val currentLanguage: String = LanguagePreferenceManager.DEFAULT_LANGUAGE,
+    val detectedType: CaptureType = CaptureType.NOTE
 )
 
 @HiltViewModel
@@ -48,6 +57,7 @@ class NoteViewModel @Inject constructor(
     private val repository: NoteRepository,
     private val authManager: AuthManager,
     private val storageConfigManager: StorageConfigManager,
+    private val languagePreferenceManager: LanguagePreferenceManager,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -72,23 +82,27 @@ class NoteViewModel @Inject constructor(
                 listeningState = ListeningState.IDLE,
                 submitError = message
             ) }
-        }
+        },
+        initialLanguage = languagePreferenceManager.getLanguage()
     )
 
     init {
-        _uiState.update { it.copy(speechAvailable = speechManager.isAvailable) }
+        _uiState.update { it.copy(
+            speechAvailable = speechManager.isAvailable,
+            currentLanguage = languagePreferenceManager.getLanguage()
+        ) }
         observeSubmissions()
         observePendingCount()
         observeSpeechState()
-        observeCaptureFile()
+        observeLanguage()
         fetchTopic()
         checkOnboarding()
     }
 
-    private fun observeCaptureFile() {
+    private fun observeLanguage() {
         viewModelScope.launch {
-            storageConfigManager.captureFolder.collect { captureFolder ->
-                _uiState.update { it.copy(captureFolder = captureFolder) }
+            languagePreferenceManager.currentLanguage.collect { language ->
+                _uiState.update { it.copy(currentLanguage = language) }
             }
         }
     }
@@ -189,6 +203,18 @@ class NoteViewModel @Inject constructor(
         speechManager.stop()
     }
 
+    /**
+     * Start voice input only if the user is in VOICE mode
+     * Used by MainScreen pager to resume voice when returning to Dictation page
+     */
+    fun startVoiceInputIfReady() {
+        if (_uiState.value.inputMode == InputMode.VOICE &&
+            _uiState.value.permissionGranted &&
+            _uiState.value.speechAvailable) {
+            speechManager.start()
+        }
+    }
+
     fun clearSubmitSuccess() {
         _uiState.update { it.copy(submitSuccess = false) }
     }
@@ -202,6 +228,141 @@ class NoteViewModel @Inject constructor(
         if (_uiState.value.inputMode == InputMode.KEYBOARD) {
             confirmedText = text.trim()
         }
+        detectCaptureType(text)
+    }
+
+    private fun detectCaptureType(text: String) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) {
+            _uiState.update { it.copy(detectedType = CaptureType.NOTE) }
+            return
+        }
+
+        val lines = trimmed.split("\n")
+
+        // Check for URLs first (single line starting with http/https)
+        val urlPattern = Regex("^https?://\\S+$", RegexOption.IGNORE_CASE)
+        if (lines.size == 1 && urlPattern.matches(trimmed)) {
+            _uiState.update { it.copy(detectedType = CaptureType.LINK) }
+            return
+        }
+
+        // Check for TODO patterns
+        val todoKeywords = listOf("TODO", "TASK:", "@TODO", "DO:", "☐")
+        val hasTodoPrefix = lines.any { line ->
+            todoKeywords.any { keyword ->
+                line.trim().startsWith(keyword, ignoreCase = true) ||
+                line.trim().startsWith("* TODO", ignoreCase = true) ||
+                line.trim().startsWith("- TODO", ignoreCase = true)
+            }
+        }
+        if (hasTodoPrefix) {
+            _uiState.update { it.copy(detectedType = CaptureType.TODO) }
+            return
+        }
+
+        // Check for checklists (- [ ], * [ ], [ ], ☑, ☐)
+        val checklistPattern = Regex("^\\s*(\\*\\s+|-\\s+|\\d+\\.\\s+|\\-\\s+)?(\\[\\s*\\]|[☑☐✓✗])\\s+", RegexOption.IGNORE_CASE)
+        val checklistCount = lines.count { checklistPattern.containsMatchIn(it) }
+        if (checklistCount >= 1 && checklistCount == lines.size) {
+            _uiState.update { it.copy(detectedType = CaptureType.CHECKLIST) }
+            return
+        }
+
+        // Check for bullet lists
+        val bulletPattern = Regex("^\\s*(\\*\\s+|-\\s+|•\\s+|→\\s+|≫\\s+)", RegexOption.IGNORE_CASE)
+        val bulletCount = lines.count { bulletPattern.containsMatchIn(it) }
+        if (bulletCount >= 1 && bulletCount == lines.size) {
+            _uiState.update { it.copy(detectedType = CaptureType.BULLET) }
+            return
+        }
+
+        _uiState.update { it.copy(detectedType = CaptureType.NOTE) }
+    }
+
+    private fun processCaptureText(text: String, captureType: CaptureType): String {
+        val lines = text.split("\n")
+        val currentTime = java.time.LocalDateTime.now()
+            .format(java.time.format.DateTimeFormatter.ofPattern("[yyyy-MM-dd EEEE]"))
+
+        return when (captureType) {
+            CaptureType.NOTE -> {
+                // For regular notes, use improved dictation format
+                val firstSentence = extractFirstSentence(text)
+                val body = text.removePrefix(firstSentence).trim()
+                if (body.isNotEmpty()) {
+                    "* $firstSentence\n$body"
+                } else {
+                    text
+                }
+            }
+            CaptureType.LINK -> {
+                // Convert URL to org-mode link [[url][description]]
+                val description = lines.getOrNull(1)?.trim() ?: "Link"
+                "[[${text.trim()}][$description]]"
+            }
+            CaptureType.CHECKLIST -> {
+                // Ensure proper org-mode checkbox format
+                lines.mapIndexed { index, line ->
+                    val trimmed = line.trim()
+                    when {
+                        trimmed.startsWith("- [ ]") || trimmed.startsWith("* [ ]") -> trimmed
+                        trimmed.startsWith("- [") || trimmed.startsWith("* [") -> trimmed
+                        trimmed.startsWith("[ ]") -> "- $trimmed"
+                        trimmed.startsWith("[") && !trimmed.startsWith("[[") -> "- $trimmed"
+                        trimmed.matches(Regex("^[☑☐✓✗]\\s+.*")) -> "- [${if (trimmed.startsWith("☑") || trimmed.startsWith("✓")) "X" else " "}] ${trimmed.substring(1).trim()}"
+                        else -> "- [ ] $trimmed"
+                    }
+                }.joinToString("\n")
+            }
+            CaptureType.BULLET -> {
+                // Convert bullets to org-mode format
+                lines.map { line ->
+                    val trimmed = line.trim()
+                    when {
+                        trimmed.startsWith("* ") || trimmed.startsWith("- ") -> trimmed
+                        trimmed.startsWith("• ") || trimmed.startsWith("→ ") || trimmed.startsWith("≫ ") -> "- ${trimmed.substring(2)}"
+                        trimmed.matches(Regex("^\\d+\\..*")) -> "- ${trimmed.substringAfter(".").trim()}"
+                        else -> "- $trimmed"
+                    }
+                }.joinToString("\n")
+            }
+            CaptureType.TODO -> {
+                // Convert to proper org-mode TODO
+                lines.mapIndexed { index, line ->
+                    val trimmed = line.trim()
+                    when {
+                        trimmed.startsWith("TODO", ignoreCase = true) || trimmed.startsWith("TASK:", ignoreCase = true) -> "* TODO ${trimmed.substringAfter(" ").substringAfter(":").trim()}"
+                        trimmed.startsWith("@TODO", ignoreCase = true) -> "* TODO ${trimmed.substringAfter("@TODO").trim()}"
+                        trimmed.startsWith("☐") -> "* TODO ${trimmed.substring(1).trim()}"
+                        trimmed.startsWith("* TODO") || trimmed.startsWith("- TODO") -> trimmed
+                        index == 0 -> "* TODO $trimmed"
+                        else -> trimmed
+                    }
+                }.joinToString("\n")
+            }
+        }
+    }
+
+    private fun extractFirstSentence(text: String): String {
+        val sentenceEnders = Regex("[.?!][\\s\n]")
+        val match = sentenceEnders.find(text)
+        return if (match != null) {
+            val endIndex = match.range.last + 1
+            val firstSentence = text.substring(0, endIndex).trim()
+            if (firstSentence.length > 200) {
+                text.substring(0, 200).substringBeforeLast(" ") + "..."
+            } else {
+                firstSentence
+            }
+        } else {
+            val truncated = text.take(200)
+            if (truncated.length < text.length) {
+                truncated.substringBeforeLast(" ") + "..."
+            } else {
+                truncated
+            }
+        }
     }
 
     fun submit() {
@@ -211,9 +372,11 @@ class NoteViewModel @Inject constructor(
         val wasVoice = _uiState.value.inputMode == InputMode.VOICE
         speechManager.stop()
 
+        val processedText = processCaptureText(text, _uiState.value.detectedType)
+
         viewModelScope.launch {
             _uiState.update { it.copy(isSubmitting = true, submitError = null) }
-            val result = repository.submitNote(text)
+            val result = repository.submitNote(processedText)
 
             result.onSuccess { submitResult ->
                 when (submitResult) {
@@ -250,19 +413,13 @@ class NoteViewModel @Inject constructor(
         }
     }
 
-    fun showCaptureFolderDialog() {
-        _uiState.update { it.copy(showCaptureFolderDialog = true) }
-    }
-
-    fun hideCaptureFolderDialog() {
-        _uiState.update { it.copy(showCaptureFolderDialog = false) }
-    }
-
-    fun setCaptureFolder(folder: String) {
-        viewModelScope.launch {
-            storageConfigManager.setCaptureFolder(folder)
-            _uiState.update { it.copy(showCaptureFolderDialog = false) }
-        }
+    /**
+     * Toggle between English and Nepali language.
+     * Saves preference and updates the speech recognizer.
+     */
+    fun toggleLanguage() {
+        val newLanguage = languagePreferenceManager.toggleLanguage()
+        speechManager.setLanguage(newLanguage)
     }
 
     override fun onCleared() {

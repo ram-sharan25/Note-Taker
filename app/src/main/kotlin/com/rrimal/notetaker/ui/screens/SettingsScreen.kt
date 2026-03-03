@@ -4,25 +4,30 @@ import android.content.ComponentName
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsTopHeight
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -35,33 +40,39 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.material3.OutlinedTextField
-import com.rrimal.notetaker.data.storage.StorageMode
-import com.rrimal.notetaker.ui.theme.Blue40
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
-import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.rrimal.notetaker.data.storage.StorageMode
+import com.rrimal.notetaker.ui.screens.toggl.TogglSettingsCard
+import com.rrimal.notetaker.ui.screens.pomodoro.PomodoroSettingsCard
+import com.rrimal.notetaker.ui.theme.Blue40
 import com.rrimal.notetaker.ui.viewmodels.SettingsViewModel
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -71,8 +82,13 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val pomodoroDuration by viewModel.pomodoroDuration.collectAsState()
+    val shortBreakDuration by viewModel.shortBreakDuration.collectAsState()
+    val longBreakDuration by viewModel.longBreakDuration.collectAsState()
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showSignOutDialog by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val lifecycleState by lifecycleOwner.lifecycle.currentStateFlow.collectAsState()
@@ -84,6 +100,7 @@ fun SettingsScreen(
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             Column {
                 Spacer(
@@ -106,7 +123,7 @@ fun SettingsScreen(
                 )
             }
         }
-    ) { innerPadding ->
+    ) { innerPadding: PaddingValues ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -139,7 +156,7 @@ fun SettingsScreen(
                     // GitHub Markdown option
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         RadioButton(
                             selected = uiState.storageMode == StorageMode.GITHUB_MARKDOWN,
@@ -161,7 +178,7 @@ fun SettingsScreen(
                     // Local Org Files option
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         RadioButton(
                             selected = uiState.storageMode == StorageMode.LOCAL_ORG_FILES,
@@ -215,7 +232,7 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Inbox Configuration (visible when LOCAL_ORG_FILES mode)
+            // Phone Inbox Configuration (visible when LOCAL_ORG_FILES mode)
             if (uiState.storageMode == StorageMode.LOCAL_ORG_FILES) {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -225,51 +242,85 @@ fun SettingsScreen(
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(
-                            text = "Inbox Configuration",
+                            text = "Phone Inbox Folder",
                             style = MaterialTheme.typography.titleMedium
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            "Configure where inbox TODO entries are saved when using the inbox capture feature (✓ icon)",
+                            "Select the phone inbox folder where dictations, TODOs, and sync files are organized",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(modifier = Modifier.height(16.dp))
 
-                        var inboxPath by remember { mutableStateOf(uiState.inboxFilePath) }
-
-                        LaunchedEffect(uiState.inboxFilePath) {
-                            inboxPath = uiState.inboxFilePath
+                        // Phone inbox folder picker
+                        val phoneInboxFolderPickerLauncher = rememberLauncherForActivityResult(
+                            contract = ActivityResultContracts.OpenDocumentTree()
+                        ) { uri ->
+                            uri?.let { viewModel.setPhoneInboxFolderUri(it) }
                         }
 
-                        Text(
-                            "Inbox file path:",
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.padding(bottom = 8.dp)
-                        )
-                        OutlinedTextField(
-                            value = inboxPath,
-                            onValueChange = { inboxPath = it },
-                            label = { Text("File path") },
-                            placeholder = { Text("inbox.org") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            "Examples: inbox.org, Brain/inbox.org, Work/todos.org",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Button(
-                            onClick = {
-                                viewModel.setInboxFilePath(inboxPath.trim())
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = inboxPath.trim().isNotEmpty()
-                        ) {
-                            Text("Save Inbox Path")
+                        if (uiState.phoneInboxFolderUri != null) {
+                            Text(
+                                "Phone Inbox Folder Selected",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                uiState.phoneInboxFolderUri ?: "",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            
+                            // Show standardized directory structure (read-only)
+                            Text(
+                                "Directory Structure:",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Surface(
+                                modifier = Modifier.fillMaxWidth(),
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                shape = MaterialTheme.shapes.small
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Text(
+                                        "phone_inbox/\n" +
+                                        "├── dictations/     (voice notes)\n" +
+                                        "├── inbox/\n" +
+                                        "│   └── inbox.org   (TODO entries)\n" +
+                                        "├── sync/           (state changes)\n" +
+                                        "└── agenda.org      (agenda view)",
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                        ),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(12.dp))
+                            OutlinedButton(
+                                onClick = { phoneInboxFolderPickerLauncher.launch(null) },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Change Phone Inbox Folder")
+                            }
+                        } else {
+                            Text(
+                                "No phone inbox folder selected",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(
+                                onClick = { phoneInboxFolderPickerLauncher.launch(null) },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Select Phone Inbox Folder")
+                            }
                         }
                     }
                 }
@@ -526,6 +577,21 @@ fun SettingsScreen(
             }
             Spacer(modifier = Modifier.height(12.dp))
 
+            // Toggl Track Integration section
+            TogglSettingsCard()
+            Spacer(modifier = Modifier.height(12.dp))
+            
+            // Pomodoro Timer Settings section
+            PomodoroSettingsCard(
+                pomodoroDuration = pomodoroDuration,
+                shortBreakDuration = shortBreakDuration,
+                longBreakDuration = longBreakDuration,
+                onPomodoroDurationChange = { viewModel.setPomodoroDuration(it) },
+                onShortBreakDurationChange = { viewModel.setShortBreakDuration(it) },
+                onLongBreakDurationChange = { viewModel.setLongBreakDuration(it) }
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+
             // Delete All Data section
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -554,6 +620,55 @@ fun SettingsScreen(
                         Text("Delete All Data")
                     }
                 }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Debug: Reset onboarding (hidden, tap version 5 times to trigger)
+            var tapCount by remember { mutableStateOf(0) }
+            var showResetDialog by remember { mutableStateOf(false) }
+
+            Text(
+                text = "Version ${com.rrimal.notetaker.BuildConfig.VERSION_NAME} (${com.rrimal.notetaker.BuildConfig.VERSION_CODE})",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        tapCount++
+                        if (tapCount >= 5) {
+                            showResetDialog = true
+                            tapCount = 0
+                        }
+                    }
+                    .padding(vertical = 8.dp),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
+
+            if (showResetDialog) {
+                AlertDialog(
+                    onDismissRequest = { showResetDialog = false },
+                    title = { Text("Reset Onboarding") },
+                    text = { 
+                        Text("This will reset the app to first-launch state and show the onboarding screen again on next start. Storage mode and folders will remain configured.") 
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            coroutineScope.launch {
+                                viewModel.resetOnboarding()
+                                showResetDialog = false
+                                snackbarHostState.showSnackbar("Onboarding reset. Restart app to see onboarding screen.")
+                            }
+                        }) {
+                            Text("Reset")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showResetDialog = false }) {
+                            Text("Cancel")
+                        }
+                    }
+                )
             }
         }
     }

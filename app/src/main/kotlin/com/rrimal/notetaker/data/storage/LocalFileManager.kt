@@ -143,44 +143,82 @@ class LocalFileManager @Inject constructor(
         relativePath: String = ""
     ): Result<Unit> = withContext(Dispatchers.IO) {
         try {
+            Log.d("LocalFileManager", "writeFile: filename=$filename")
+            
             val folderUriStr = storageConfigManager.localFolderUri.first()
                 ?: return@withContext Result.failure(Exception("No folder selected"))
 
             val folderUri = Uri.parse(folderUriStr)
-            val documentId = DocumentsContract.getTreeDocumentId(folderUri)
 
-            // Check if file already exists
-            val existingFileUri = findFileByName(folderUri, documentId, filename)
+            // Check if file already exists (handle paths with directories)
+            val existingFileUri = if (filename.contains('/')) {
+                // File is in a subdirectory, use findFileByPath
+                Log.d("LocalFileManager", "writeFile: searching for file with path: $filename")
+                findFileByPath(folderUri, filename)
+            } else {
+                // File is in root, use findFileByName
+                Log.d("LocalFileManager", "writeFile: searching for file in root: $filename")
+                val documentId = DocumentsContract.getTreeDocumentId(folderUri)
+                findFileByName(folderUri, documentId, filename)
+            }
 
             val fileUri = if (existingFileUri != null) {
                 // Overwrite existing file
+                Log.d("LocalFileManager", "writeFile: found existing file, overwriting")
                 existingFileUri
             } else {
                 // Create new file
-                val parentUri = DocumentsContract.buildDocumentUriUsingTree(folderUri, documentId)
+                Log.d("LocalFileManager", "writeFile: file not found, creating new file")
+                
+                // Determine parent directory and filename
+                val (parentDocId, actualFilename) = if (filename.contains('/')) {
+                    // Extract directory path and filename
+                    val lastSlash = filename.lastIndexOf('/')
+                    val dirPath = filename.substring(0, lastSlash)
+                    val fileOnly = filename.substring(lastSlash + 1)
+                    
+                    Log.d("LocalFileManager", "writeFile: dirPath=$dirPath, fileOnly=$fileOnly")
+                    
+                    // Navigate to parent directory
+                    val parentId = navigateToFolder(dirPath)
+                        ?: return@withContext Result.failure(Exception("Parent directory not found: $dirPath"))
+                    
+                    parentId to fileOnly
+                } else {
+                    // Root directory
+                    val documentId = DocumentsContract.getTreeDocumentId(folderUri)
+                    documentId to filename
+                }
+                
+                val parentUri = DocumentsContract.buildDocumentUriUsingTree(folderUri, parentDocId)
                 val mimeType = when {
-                    filename.endsWith(".org") -> "text/org"
-                    filename.endsWith(".md") -> "text/markdown"
+                    actualFilename.endsWith(".org") -> "text/org"
+                    actualFilename.endsWith(".md") -> "text/markdown"
+                    actualFilename.endsWith(".json") -> "application/json"
                     else -> "text/plain"
                 }
 
+                Log.d("LocalFileManager", "writeFile: creating file '$actualFilename' in parent $parentDocId")
                 DocumentsContract.createDocument(
                     context.contentResolver,
                     parentUri,
                     mimeType,
-                    filename
+                    actualFilename
                 ) ?: return@withContext Result.failure(Exception("Failed to create file: $filename"))
             }
 
             // Write content
+            Log.d("LocalFileManager", "writeFile: writing content (${content.length} chars)")
             context.contentResolver.openOutputStream(fileUri, "wt")?.use { outputStream ->
                 OutputStreamWriter(outputStream).use { writer ->
                     writer.write(content)
                 }
             }
 
+            Log.d("LocalFileManager", "writeFile: SUCCESS")
             Result.success(Unit)
         } catch (e: Exception) {
+            Log.e("LocalFileManager", "writeFile: FAILED", e)
             Result.failure(e)
         }
     }
@@ -280,6 +318,7 @@ class LocalFileManager @Inject constructor(
             val mimeType = when {
                 fileName.endsWith(".org") -> "text/org"
                 fileName.endsWith(".md") -> "text/markdown"
+                fileName.endsWith(".json") -> "application/json"
                 fileName.endsWith(".txt") -> "text/plain"
                 else -> "text/plain"
             }
@@ -500,5 +539,576 @@ class LocalFileManager @Inject constructor(
             Log.e("LocalFileManager", "navigateToFolder: exception", e)
             return@withContext null
         }
+    }
+
+    // ========== Phone Inbox Helper Methods ==========
+
+    /**
+     * Get the document ID for the phone inbox folder
+     * @return Document ID or null if not configured
+     */
+    private suspend fun getPhoneInboxDocumentId(): String? {
+        val phoneInboxUriStr = storageConfigManager.phoneInboxFolderUri.first()
+            ?: return null
+        val phoneInboxUri = Uri.parse(phoneInboxUriStr)
+        return DocumentsContract.getTreeDocumentId(phoneInboxUri)
+    }
+
+    /**
+     * Get the Uri for the phone inbox folder
+     * @return Uri or null if not configured
+     */
+    private suspend fun getPhoneInboxUri(): Uri? {
+        val phoneInboxUriStr = storageConfigManager.phoneInboxFolderUri.first()
+            ?: return null
+        return Uri.parse(phoneInboxUriStr)
+    }
+
+    /**
+     * Navigate to a subdirectory within a parent URI
+     * @param parentUri The parent folder URI
+     * @param parentDocId The parent document ID
+     * @param subdirectoryName Name of the subdirectory to find
+     * @return Document ID of the subdirectory, or null if not found
+     */
+    private fun findChildDirectory(parentUri: Uri, parentDocId: String, subdirectoryName: String): String? {
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(parentUri, parentDocId)
+        
+        context.contentResolver.query(
+            childrenUri,
+            arrayOf(
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_MIME_TYPE
+            ),
+            null,
+            null,
+            null
+        )?.use { cursor ->
+            while (cursor.moveToNext()) {
+                val docId = cursor.getString(0)
+                val name = cursor.getString(1)
+                val mimeType = cursor.getString(2)
+                
+                if (name == subdirectoryName && mimeType == DocumentsContract.Document.MIME_TYPE_DIR) {
+                    return docId
+                }
+            }
+        }
+        
+        return null
+    }
+
+    /**
+     * Navigate to a subdirectory within phone inbox, creating it if it doesn't exist
+     * @param subdirectoryName Name of the subdirectory (e.g., "dictations", "inbox", "sync")
+     * @return Document ID of the subdirectory
+     * @throws IllegalStateException if phone inbox not configured
+     * @throws IOException if directory cannot be created
+     */
+    private suspend fun navigateToPhoneInboxSubdirectory(subdirectoryName: String): String {
+        val phoneInboxUri = getPhoneInboxUri() 
+            ?: throw IllegalStateException("Phone inbox folder not configured")
+        val phoneInboxDocId = getPhoneInboxDocumentId()
+            ?: throw IllegalStateException("Phone inbox folder not configured")
+        
+        // Check if subdirectory exists
+        val existingDocId = findChildDirectory(phoneInboxUri, phoneInboxDocId, subdirectoryName)
+        if (existingDocId != null) {
+            return existingDocId
+        }
+        
+        // Create subdirectory
+        val phoneInboxDocUri = DocumentsContract.buildDocumentUriUsingTree(phoneInboxUri, phoneInboxDocId)
+        val newDirUri = DocumentsContract.createDocument(
+            context.contentResolver,
+            phoneInboxDocUri,
+            DocumentsContract.Document.MIME_TYPE_DIR,
+            subdirectoryName
+        ) ?: throw java.io.IOException("Failed to create subdirectory: $subdirectoryName")
+        
+        val newDocId = DocumentsContract.getDocumentId(newDirUri)
+        Log.d(TAG, "Created phone inbox subdirectory: $subdirectoryName (docId: $newDocId)")
+        return newDocId
+    }
+
+    // ========== Phone Inbox Public Methods ==========
+
+    /**
+     * Ensure phone inbox directory structure exists
+     * Creates dictations/, inbox/, and sync/ subdirectories if they don't exist
+     * Called on app startup
+     * 
+     * @return Result with Unit on success, error on failure
+     */
+    suspend fun ensurePhoneInboxStructure(): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            // Check if phone inbox is configured
+            val phoneInboxUri = getPhoneInboxUri()
+            if (phoneInboxUri == null) {
+                Log.d(TAG, "Phone inbox not configured, skipping structure creation")
+                return@runCatching
+            }
+            
+            val phoneInboxDocId = getPhoneInboxDocumentId()
+                ?: throw IllegalStateException("Phone inbox folder not configured")
+            
+            // Create all required subdirectories
+            PhoneInboxStructure.REQUIRED_SUBDIRECTORIES.forEach { subdirName ->
+                navigateToPhoneInboxSubdirectory(subdirName)
+            }
+            
+            // Create placeholder agenda.org if it doesn't exist
+            val agendaFilename = PhoneInboxStructure.AGENDA_FILENAME
+            val existingAgendaDocId = findChildFile(phoneInboxUri, phoneInboxDocId, agendaFilename)
+            
+            if (existingAgendaDocId == null) {
+                Log.d(TAG, "Creating placeholder $agendaFilename")
+                
+                // Create placeholder content
+                val agendaPlaceholderContent = """
+                    |#+TITLE: Agenda View
+                    |#+FILETAGS: :agenda:
+                    |
+                    |* Welcome to Note Taker
+                    |:PROPERTIES:
+                    |:CREATED: [${java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd EEE HH:mm"))}]
+                    |:END:
+                    |
+                    |This is your agenda view. Tasks will appear here once you:
+                    |1. Add tasks using the Inbox Capture screen (swipe right)
+                    |2. Set up Emacs to sync org files (see documentation)
+                    |
+                    |For now, you can create quick notes and TODO entries!
+                """.trimMargin()
+                
+                // Create the file at root of phone inbox
+                val phoneInboxRootUri = DocumentsContract.buildDocumentUriUsingTree(phoneInboxUri, phoneInboxDocId)
+                val newFileUri = DocumentsContract.createDocument(
+                    context.contentResolver,
+                    phoneInboxRootUri,
+                    "text/org",
+                    agendaFilename
+                ) ?: throw java.io.IOException("Failed to create $agendaFilename")
+                
+                // Write placeholder content
+                context.contentResolver.openOutputStream(newFileUri)?.use { outputStream ->
+                    OutputStreamWriter(outputStream).use { writer ->
+                        writer.write(agendaPlaceholderContent)
+                    }
+                } ?: throw java.io.IOException("Failed to write to $agendaFilename")
+                
+                Log.d(TAG, "Created placeholder $agendaFilename")
+            }
+            
+            // Create placeholder inbox/inbox.org if it doesn't exist
+            val inboxSubdirDocId = findChildDirectory(phoneInboxUri, phoneInboxDocId, PhoneInboxStructure.INBOX_DIR)
+            if (inboxSubdirDocId != null) {
+                val existingInboxDocId = findChildFile(phoneInboxUri, inboxSubdirDocId, PhoneInboxStructure.INBOX_FILENAME)
+                
+                if (existingInboxDocId == null) {
+                    Log.d(TAG, "Creating placeholder ${PhoneInboxStructure.INBOX_FILE_PATH}")
+                    
+                    val inboxPlaceholderContent = """
+                        |#+TITLE: Inbox
+                        |#+FILETAGS: :inbox:
+                        |
+                        |* Your tasks will appear here
+                        |:PROPERTIES:
+                        |:CREATED: [${java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd EEE HH:mm"))}]
+                        |:END:
+                        |
+                        |Add tasks using the Inbox Capture screen (swipe right from Agenda).
+                    """.trimMargin()
+                    
+                    // Create the file in inbox/ subdirectory
+                    val inboxSubdirUri = DocumentsContract.buildDocumentUriUsingTree(phoneInboxUri, inboxSubdirDocId)
+                    val newInboxFileUri = DocumentsContract.createDocument(
+                        context.contentResolver,
+                        inboxSubdirUri,
+                        "text/org",
+                        PhoneInboxStructure.INBOX_FILENAME
+                    ) ?: throw java.io.IOException("Failed to create ${PhoneInboxStructure.INBOX_FILENAME}")
+                    
+                    // Write placeholder content
+                    context.contentResolver.openOutputStream(newInboxFileUri)?.use { outputStream ->
+                        OutputStreamWriter(outputStream).use { writer ->
+                            writer.write(inboxPlaceholderContent)
+                        }
+                    } ?: throw java.io.IOException("Failed to write to ${PhoneInboxStructure.INBOX_FILENAME}")
+                    
+                    Log.d(TAG, "Created placeholder ${PhoneInboxStructure.INBOX_FILE_PATH}")
+                }
+            }
+            
+            Log.d(TAG, "Phone inbox structure verified/created")
+        }
+    }
+
+    /**
+     * Write a file to the phone inbox folder at a specific relative path
+     * Creates parent subdirectories if they don't exist
+     * 
+     * @param relativePath Path relative to phone inbox (e.g., "dictations/note.org")
+     * @param content File content
+     * @return Result with Unit on success, error on failure
+     */
+    suspend fun writeFileToPhoneInbox(relativePath: String, content: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            require(relativePath.isNotBlank()) { "Relative path cannot be blank" }
+            
+            val phoneInboxUri = getPhoneInboxUri()
+                ?: throw IllegalStateException("Phone inbox folder not configured")
+            
+            // Parse the path to extract subdirectory and filename
+            val parts = relativePath.split("/")
+            require(parts.size >= 2) { "Path must include subdirectory and filename" }
+            
+            val subdirectory = parts[0]
+            val filename = parts.drop(1).joinToString("/")
+            
+            // Navigate to subdirectory
+            val subdirDocId = navigateToPhoneInboxSubdirectory(subdirectory)
+            val subdirUri = DocumentsContract.buildDocumentUriUsingTree(phoneInboxUri, subdirDocId)
+            
+            // Check if file exists
+            val existingFileDocId = findChildFile(phoneInboxUri, subdirDocId, filename)
+            val fileUri = if (existingFileDocId != null) {
+                // File exists, open for writing (overwrite)
+                DocumentsContract.buildDocumentUriUsingTree(phoneInboxUri, existingFileDocId)
+            } else {
+                // Create new file
+                val mimeType = when {
+                    filename.endsWith(".org") -> "text/org"
+                    filename.endsWith(".json") -> "application/json"
+                    else -> "text/plain"
+                }
+                
+                DocumentsContract.createDocument(
+                    context.contentResolver,
+                    subdirUri,
+                    mimeType,
+                    filename
+                ) ?: throw java.io.IOException("Failed to create file: $filename")
+            }
+            
+            // Write content
+            context.contentResolver.openOutputStream(fileUri, "wt")?.use { outputStream ->
+                OutputStreamWriter(outputStream).use { writer ->
+                    writer.write(content)
+                }
+            } ?: throw java.io.IOException("Failed to open output stream for: $filename")
+            
+            Log.d(TAG, "Wrote file to phone inbox: $relativePath")
+            Unit
+        }
+    }
+
+    /**
+     * Find a child file in a directory
+     * @param parentUri Parent folder URI
+     * @param parentDocId Parent document ID
+     * @param filename Name of the file to find
+     * @return Document ID of the file, or null if not found
+     */
+    private fun findChildFile(parentUri: Uri, parentDocId: String, filename: String): String? {
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(parentUri, parentDocId)
+        
+        context.contentResolver.query(
+            childrenUri,
+            arrayOf(
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_MIME_TYPE
+            ),
+            null,
+            null,
+            null
+        )?.use { cursor ->
+            while (cursor.moveToNext()) {
+                val docId = cursor.getString(0)
+                val name = cursor.getString(1)
+                val mimeType = cursor.getString(2)
+                
+                if (name == filename && mimeType != DocumentsContract.Document.MIME_TYPE_DIR) {
+                    return docId
+                }
+            }
+        }
+        
+        return null
+    }
+
+    /**
+     * Read a file from the phone inbox folder at a specific relative path
+     * 
+     * @param relativePath Path relative to phone inbox (e.g., "agenda.org", "inbox/inbox.org")
+     * @return Result with file content on success, error on failure
+     */
+    suspend fun readFileFromPhoneInbox(relativePath: String): Result<String> = withContext(Dispatchers.IO) {
+        Log.d(TAG, "=== readFileFromPhoneInbox START ===")
+        Log.d(TAG, "  relativePath: $relativePath")
+        
+        runCatching {
+            require(relativePath.isNotBlank()) { "Relative path cannot be blank" }
+            
+            val phoneInboxUri = getPhoneInboxUri()
+                ?: throw IllegalStateException("Phone inbox folder not configured")
+            val phoneInboxDocId = getPhoneInboxDocumentId()
+                ?: throw IllegalStateException("Phone inbox folder not configured")
+            
+            Log.d(TAG, "  phoneInboxUri: $phoneInboxUri")
+            Log.d(TAG, "  phoneInboxDocId: $phoneInboxDocId")
+            
+            // Parse the path
+            val parts = relativePath.split("/")
+            Log.d(TAG, "  path parts: $parts")
+            
+            // Navigate to file location
+            val fileDocId = if (parts.size == 1) {
+                // File is at root of phone inbox (e.g., "agenda.org")
+                Log.d(TAG, "  Looking for file in root: ${parts[0]}")
+                val docId = findChildFile(phoneInboxUri, phoneInboxDocId, parts[0])
+                    ?: throw java.io.FileNotFoundException("File not found: $relativePath")
+                Log.d(TAG, "  Found file docId: $docId")
+                docId
+            } else {
+                // File is in a subdirectory (e.g., "inbox/inbox.org")
+                val subdirectory = parts[0]
+                val filename = parts.drop(1).joinToString("/")
+                
+                Log.d(TAG, "  Looking in subdirectory: $subdirectory, filename: $filename")
+                val subdirDocId = findChildDirectory(phoneInboxUri, phoneInboxDocId, subdirectory)
+                    ?: throw java.io.FileNotFoundException("Subdirectory not found: $subdirectory")
+                Log.d(TAG, "  Found subdirectory docId: $subdirDocId")
+                
+                val docId = findChildFile(phoneInboxUri, subdirDocId, filename)
+                    ?: throw java.io.FileNotFoundException("File not found: $relativePath")
+                Log.d(TAG, "  Found file docId: $docId")
+                docId
+            }
+            
+            // Read file content
+            Log.d(TAG, "  Reading file content...")
+            val fileUri = DocumentsContract.buildDocumentUriUsingTree(phoneInboxUri, fileDocId)
+            val content = context.contentResolver.openInputStream(fileUri)?.use { inputStream ->
+                BufferedReader(InputStreamReader(inputStream)).use { reader ->
+                    reader.readText()
+                }
+            } ?: throw java.io.IOException("Failed to read file: $relativePath")
+            
+            Log.d(TAG, "  Content length: ${content.length} bytes")
+            Log.d(TAG, "  Content preview (first 300 chars):\n${content.take(300)}")
+            Log.d(TAG, "=== readFileFromPhoneInbox END ===")
+            
+            content
+        }.also { result ->
+            if (result.isFailure) {
+                Log.e(TAG, "readFileFromPhoneInbox FAILED", result.exceptionOrNull())
+            }
+        }
+    }
+
+    /**
+     * Create a new file in a phone inbox subdirectory with the given content
+     * Throws exception if file already exists
+     * 
+     * @param filename Name of the file to create
+     * @param subdirectory Name of the subdirectory (e.g., "dictations", "inbox")
+     * @param content File content
+     * @return Result with Unit on success, error on failure
+     */
+    suspend fun createFileInPhoneInbox(
+        filename: String,
+        subdirectory: String,
+        content: String
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            require(filename.isNotBlank()) { "Filename cannot be blank" }
+            require(subdirectory.isNotBlank()) { "Subdirectory cannot be blank" }
+            
+            val phoneInboxUri = getPhoneInboxUri()
+                ?: throw IllegalStateException("Phone inbox folder not configured")
+            
+            // Navigate to subdirectory
+            val subdirDocId = navigateToPhoneInboxSubdirectory(subdirectory)
+            
+            // Check if file already exists
+            val existingFileDocId = findChildFile(phoneInboxUri, subdirDocId, filename)
+            if (existingFileDocId != null) {
+                throw java.io.IOException("File already exists: $filename")
+            }
+            
+            // Create new file
+            val subdirUri = DocumentsContract.buildDocumentUriUsingTree(phoneInboxUri, subdirDocId)
+            val mimeType = when {
+                filename.endsWith(".org") -> "text/org"
+                filename.endsWith(".json") -> "application/json"
+                else -> "text/plain"
+            }
+            
+            val newFileUri = DocumentsContract.createDocument(
+                context.contentResolver,
+                subdirUri,
+                mimeType,
+                filename
+            ) ?: throw java.io.IOException("Failed to create file: $filename")
+            
+            // Write content
+            context.contentResolver.openOutputStream(newFileUri)?.use { outputStream ->
+                OutputStreamWriter(outputStream).use { writer ->
+                    writer.write(content)
+                }
+            } ?: throw java.io.IOException("Failed to write to file: $filename")
+            
+            Log.d(TAG, "Created file in phone inbox: $subdirectory/$filename")
+            Unit
+        }
+    }
+
+    // ========== JSON Sync Methods (v0.9.0) ==========
+
+    /**
+     * Ensure sync/ directory exists at root of org files
+     * Called on app startup and before first sync write
+     * 
+     * @return Result with Unit on success, error on failure
+     * @deprecated Use ensurePhoneInboxStructure() instead (creates sync/ at phone_inbox/sync/)
+     */
+    @Deprecated("Use ensurePhoneInboxStructure() instead")
+    suspend fun ensureSyncDirectoryExists(): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val folderUriStr = storageConfigManager.localFolderUri.first()
+                ?: throw IllegalStateException("No folder selected")
+
+            val folderUri = Uri.parse(folderUriStr)
+            val rootDocId = DocumentsContract.getTreeDocumentId(folderUri)
+            val rootUri = DocumentsContract.buildDocumentUriUsingTree(folderUri, rootDocId)
+
+            // Check if sync/ already exists
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(folderUri, rootDocId)
+            var syncDirExists = false
+            
+            context.contentResolver.query(
+                childrenUri,
+                arrayOf(
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                    DocumentsContract.Document.COLUMN_MIME_TYPE
+                ),
+                null,
+                null,
+                null
+            )?.use { cursor ->
+                while (cursor.moveToNext()) {
+                    val name = cursor.getString(0)
+                    val mimeType = cursor.getString(1)
+                    if (name == "sync" && mimeType == DocumentsContract.Document.MIME_TYPE_DIR) {
+                        syncDirExists = true
+                        break
+                    }
+                }
+            }
+
+            if (syncDirExists) {
+                Log.d(TAG, "Sync directory already exists")
+                return@runCatching
+            }
+
+            // Create sync/ directory
+            val newFolderUri = DocumentsContract.createDocument(
+                context.contentResolver,
+                rootUri,
+                DocumentsContract.Document.MIME_TYPE_DIR,
+                "sync"
+            ) ?: throw java.io.IOException("Failed to create sync directory")
+
+            Log.d(TAG, "Created sync directory: $newFolderUri")
+        }
+    }
+
+    /**
+     * Write JSON file to phone_inbox/sync/ directory
+     * Overwrites if file already exists
+     * 
+     * @param filename Filename only (not full path), e.g., "ABC-123_DONE_1709467200000.json"
+     * @param content JSON content as string
+     * @return Result with Unit on success, error on failure
+     */
+    suspend fun writeSyncJson(filename: String, content: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            // Validate filename format
+            require(com.rrimal.notetaker.data.models.isValidSyncFilename(filename)) {
+                "Invalid sync filename format: $filename"
+            }
+
+            // Ensure phone inbox structure exists
+            ensurePhoneInboxStructure().getOrThrow()
+
+            // Write to phone_inbox/sync/<filename>
+            val relativePath = "${PhoneInboxStructure.SYNC_DIR}/$filename"
+            writeFileToPhoneInbox(relativePath, content).getOrThrow()
+
+            Log.d(TAG, "Wrote sync file: $relativePath")
+            Unit
+        }
+    }
+
+    /**
+     * List all JSON files in phone_inbox/sync/ directory
+     * Used for debugging and showing "pending syncs" indicator
+     * 
+     * @return Result with list of filenames (no path prefix)
+     */
+    suspend fun listSyncFiles(): Result<List<String>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val phoneInboxUri = getPhoneInboxUri()
+                ?: throw IllegalStateException("Phone inbox folder not configured")
+            val phoneInboxDocId = getPhoneInboxDocumentId()
+                ?: throw IllegalStateException("Phone inbox folder not configured")
+            
+            // Navigate to sync/ subdirectory
+            val syncDocId = findChildDirectory(phoneInboxUri, phoneInboxDocId, PhoneInboxStructure.SYNC_DIR)
+                ?: return@runCatching emptyList<String>()
+
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(phoneInboxUri, syncDocId)
+            val files = mutableListOf<String>()
+
+            context.contentResolver.query(
+                childrenUri,
+                arrayOf(
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                    DocumentsContract.Document.COLUMN_MIME_TYPE
+                ),
+                null,
+                null,
+                null
+            )?.use { cursor ->
+                while (cursor.moveToNext()) {
+                    val name = cursor.getString(0)
+                    val mimeType = cursor.getString(1)
+                    
+                    // Only include JSON files
+                    if (mimeType != DocumentsContract.Document.MIME_TYPE_DIR && name.endsWith(".json")) {
+                        files.add(name)
+                    }
+                }
+            }
+
+            files.sorted()
+        }
+    }
+
+    /**
+     * Count pending sync files in sync/ directory
+     * Lightweight version of listSyncFiles() for UI indicators
+     */
+    suspend fun countPendingSyncs(): Result<Int> = withContext(Dispatchers.IO) {
+        runCatching {
+            listSyncFiles().getOrElse { emptyList() }.size
+        }
+    }
+
+    companion object {
+        private const val TAG = "LocalFileManager"
     }
 }

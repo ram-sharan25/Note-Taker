@@ -14,13 +14,16 @@ import com.rrimal.notetaker.data.local.PendingNoteDao
 import com.rrimal.notetaker.data.local.SubmissionDao
 import com.rrimal.notetaker.data.storage.StorageConfigManager
 import com.rrimal.notetaker.data.storage.StorageMode
+import com.rrimal.notetaker.data.repository.AgendaRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -37,7 +40,10 @@ data class SettingsUiState(
     val storageMode: StorageMode = StorageMode.GITHUB_MARKDOWN,
     val localFolderUri: String? = null,
     val syncToGitHubEnabled: Boolean = false,
-    val inboxFilePath: String = "inbox.org"
+    val phoneInboxFolderUri: String? = null,
+    val agendaFiles: String = "",
+    val agendaDays: Int = 7,
+    val todoKeywords: String = "TODO IN-PROGRESS WAITING | DONE CANCELLED"
 )
 
 @HiltViewModel
@@ -49,7 +55,10 @@ class SettingsViewModel @Inject constructor(
     private val submissionDao: SubmissionDao,
     private val pendingNoteDao: PendingNoteDao,
     private val workManager: WorkManager,
-    private val storageConfigManager: StorageConfigManager
+    private val storageConfigManager: StorageConfigManager,
+    private val agendaConfigManager: com.rrimal.notetaker.data.preferences.AgendaConfigManager,
+    private val agendaRepository: AgendaRepository,
+    private val pomodoroPreferencesManager: com.rrimal.notetaker.data.preferences.PomodoroPreferencesManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SettingsUiState())
@@ -59,9 +68,46 @@ class SettingsViewModel @Inject constructor(
         observeAuth()
         observePendingCount()
         observeStorageConfig()
+        observeAgendaConfig()
         checkAssistantRole()
     }
+    private fun observeAgendaConfig() {
+        viewModelScope.launch {
+            combine(
+                agendaConfigManager.agendaFilesRaw,
+                agendaConfigManager.agendaDays,
+                agendaConfigManager.todoKeywords
+            ) { files, days, keywords ->
+                Triple(files, days, keywords)
+            }.collect { (files, days, keywords) ->
+                _uiState.update {
+                    it.copy(
+                        agendaFiles = files,
+                        agendaDays = days,
+                        todoKeywords = keywords
+                    )
+                }
+            }
+        }
+    }
 
+    fun setAgendaFiles(files: String) {
+        viewModelScope.launch {
+            agendaConfigManager.setAgendaFiles(files)
+        }
+    }
+
+    fun setAgendaDays(days: Int) {
+        viewModelScope.launch {
+            agendaConfigManager.setAgendaDays(days)
+        }
+    }
+
+    fun setTodoKeywords(keywords: String) {
+        viewModelScope.launch {
+            agendaConfigManager.setTodoKeywords(keywords)
+        }
+    }
     private fun observeAuth() {
         viewModelScope.launch {
             combine(
@@ -123,6 +169,15 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Reset onboarding flag (for debugging/testing)
+     */
+    fun resetOnboarding() {
+        viewModelScope.launch {
+            storageConfigManager.resetOnboarding()
+        }
+    }
+
     private suspend fun revokeOAuthTokenIfNeeded() {
         val authType = authManager.authType.first() ?: return
         if (authType != "oauth") return
@@ -138,22 +193,22 @@ class SettingsViewModel @Inject constructor(
                 storageConfigManager.storageMode,
                 storageConfigManager.localFolderUri,
                 storageConfigManager.syncToGitHubEnabled,
-                storageConfigManager.inboxFilePath
-            ) { mode, uri, syncEnabled, inboxFilePath ->
+                storageConfigManager.phoneInboxFolderUri
+            ) { mode, uri, syncEnabled, phoneInboxUri ->
                 data class StorageConfig(
                     val mode: StorageMode,
                     val uri: String?,
                     val syncEnabled: Boolean,
-                    val inboxFilePath: String
+                    val phoneInboxUri: String?
                 )
-                StorageConfig(mode, uri, syncEnabled, inboxFilePath)
+                StorageConfig(mode, uri, syncEnabled, phoneInboxUri)
             }.collect { config ->
                 _uiState.update {
                     it.copy(
                         storageMode = config.mode,
                         localFolderUri = config.uri,
                         syncToGitHubEnabled = config.syncEnabled,
-                        inboxFilePath = config.inboxFilePath
+                        phoneInboxFolderUri = config.phoneInboxUri
                     )
                 }
             }
@@ -184,9 +239,60 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun setInboxFilePath(path: String) {
+    fun setPhoneInboxFolderUri(uri: Uri) {
         viewModelScope.launch {
-            storageConfigManager.setInboxFilePath(path)
+            // Request persistent permission
+            val takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            context.contentResolver.takePersistableUriPermission(uri, takeFlags)
+
+            // Save to config
+            storageConfigManager.setPhoneInboxFolderUri(uri.toString())
+        }
+    }
+
+    suspend fun getAgendaFiles(): String {
+        return agendaConfigManager.agendaFilesRaw.first()
+    }
+
+    suspend fun getTodoKeywords(): String {
+        return agendaConfigManager.todoKeywords.first()
+    }
+
+    fun saveAgendaConfig(files: String, keywords: String) {
+        viewModelScope.launch {
+            agendaConfigManager.setAgendaFiles(files)
+            agendaConfigManager.setTodoKeywords(keywords)
+            // Force sync to ensure files are reloaded even if hashes match
+            agendaRepository.syncAllFiles(force = true)
+        }
+    }
+    
+    // Pomodoro Timer Preferences
+    val pomodoroDuration = pomodoroPreferencesManager.pomodoroDuration
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 25)
+    
+    val shortBreakDuration = pomodoroPreferencesManager.shortBreakDuration
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 5)
+    
+    val longBreakDuration = pomodoroPreferencesManager.longBreakDuration
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 10)
+    
+    fun setPomodoroDuration(minutes: Int) {
+        viewModelScope.launch {
+            pomodoroPreferencesManager.setPomodoroDuration(minutes)
+        }
+    }
+    
+    fun setShortBreakDuration(minutes: Int) {
+        viewModelScope.launch {
+            pomodoroPreferencesManager.setShortBreakDuration(minutes)
+        }
+    }
+    
+    fun setLongBreakDuration(minutes: Int) {
+        viewModelScope.launch {
+            pomodoroPreferencesManager.setLongBreakDuration(minutes)
         }
     }
 }

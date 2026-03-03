@@ -6,6 +6,7 @@ import com.rrimal.notetaker.data.orgmode.OrgWriter
 import kotlinx.coroutines.flow.first
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
+import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -48,12 +49,9 @@ class LocalOrgStorageBackend @Inject constructor(
     }
 
     /**
-     * Submit note by creating a new file
+     * Submit note by creating a new file in phone_inbox/dictations/
      */
     private suspend fun submitAsNewFile(text: String, metadata: NoteMetadata?): Result<SubmitResult> {
-        // Get the configured capture folder
-        val captureFolder = storageConfigManager.captureFolder.first()
-
         val timestamp = ZonedDateTime.now()
 
         // Generate filename using timestamp (same format as GitHub backend)
@@ -67,27 +65,27 @@ class LocalOrgStorageBackend @Inject constructor(
             com.rrimal.notetaker.data.orgmode.OrgFile(headlines = listOf(headline))
         )
 
-        // Create new file in the capture folder
-        fileManager.createFile(filename, captureFolder, content).getOrThrow()
+        // Create new file in phone_inbox/dictations/
+        fileManager.createFileInPhoneInbox(
+            filename = filename,
+            subdirectory = PhoneInboxStructure.DICTATIONS_DIR,
+            content = content
+        ).getOrThrow()
 
         return Result.success(SubmitResult.SENT)
     }
 
     /**
-     * Submit note by appending to inbox file
+     * Submit note by appending to phone_inbox/inbox/inbox.org
      */
     private suspend fun appendToInboxFile(text: String, metadata: NoteMetadata?): Result<SubmitResult> {
-        val inboxFilePath = storageConfigManager.inboxFilePath.first()
         val timestamp = ZonedDateTime.now()
 
         // Create org headline for inbox entry
         val headline = createInboxHeadline(text, metadata, timestamp)
 
-        // Parse inbox file path to separate directory and filename
-        val (parentPath, filename) = parseFilePath(inboxFilePath)
-
-        // Try to read existing inbox file
-        val readResult = fileManager.readFile(inboxFilePath)
+        // Try to read existing inbox file from phone_inbox/inbox/inbox.org
+        val readResult = fileManager.readFileFromPhoneInbox(PhoneInboxStructure.INBOX_FILE_PATH)
 
         if (readResult.isSuccess) {
             // File exists - update it with appended content
@@ -101,11 +99,15 @@ class LocalOrgStorageBackend @Inject constructor(
                 orgWriter.appendEntry(existingContent, headline)
             }
 
-            fileManager.updateFile(inboxFilePath, updatedContent).getOrThrow()
+            fileManager.writeFileToPhoneInbox(PhoneInboxStructure.INBOX_FILE_PATH, updatedContent).getOrThrow()
         } else {
             // File doesn't exist - create it with preamble + entry
             val content = createInboxFileWithPreamble(headline)
-            fileManager.createFile(filename, parentPath, content).getOrThrow()
+            fileManager.createFileInPhoneInbox(
+                filename = PhoneInboxStructure.INBOX_FILENAME,
+                subdirectory = PhoneInboxStructure.INBOX_DIR,
+                content = content
+            ).getOrThrow()
         }
 
         return Result.success(SubmitResult.SENT)
@@ -130,15 +132,117 @@ class LocalOrgStorageBackend @Inject constructor(
     }
 
     /**
-     * Create inbox file content with standard preamble
+     * Create quick.org file content with standard preamble
+     */
+    private fun createQuickFileWithPreamble(headline: OrgNode.Headline): String {
+        val preamble = """#+STARTUP: content showstars indent
+#+FILETAGS: quick
+#+PROPERTY: Effort_ALL 0 0:05 0:10 0:15 0:30 0:45 1:00
+
+"""
+        return preamble + orgWriter.writeHeadline(headline)
+    }
+
+    /**
+     * Create inbox.org file content with standard preamble
      */
     private fun createInboxFileWithPreamble(headline: OrgNode.Headline): String {
         val preamble = """#+STARTUP: content showstars indent
 #+FILETAGS: inbox
-#+PROPERTY: Effort_ALL 0 0:05 0:10 0:15 0:30 0:45 1:00 2:00 4:00
+#+PROPERTY: Effort_ALL 0 0:05 0:10 0:15 0:30 0:45 1:00
 
 """
         return preamble + orgWriter.writeHeadline(headline)
+    }
+
+    /**
+     * Append quick task entry to inbox/quick.org
+     */
+    suspend fun appendToQuickFile(headline: OrgNode.Headline): Result<Unit> {
+        val readResult = fileManager.readFileFromPhoneInbox(PhoneInboxStructure.QUICK_FILE_PATH)
+        if (readResult.isSuccess) {
+            val existingContent = readResult.getOrThrow()
+            val updatedContent = if (existingContent.isBlank()) {
+                createQuickFileWithPreamble(headline)
+            } else {
+                orgWriter.appendEntry(existingContent, headline)
+            }
+            fileManager.writeFileToPhoneInbox(PhoneInboxStructure.QUICK_FILE_PATH, updatedContent).getOrThrow()
+        } else {
+            val content = createQuickFileWithPreamble(headline)
+            fileManager.createFileInPhoneInbox(
+                filename = PhoneInboxStructure.QUICK_FILENAME,
+                subdirectory = PhoneInboxStructure.INBOX_DIR,
+                content = content
+            ).getOrThrow()
+        }
+        return Result.success(Unit)
+    }
+
+    /**
+     * Mark quick.org task as DONE, update ENDED and body.
+     */
+    suspend fun markQuickTaskDone(
+        createdIso: String,
+        endedIso: String,
+        newDescription: String? = null
+    ): Result<Unit> {
+        try {
+            val readResult = fileManager.readFileFromPhoneInbox(PhoneInboxStructure.QUICK_FILE_PATH)
+            if (!readResult.isSuccess) return Result.failure(Exception("Failed to read quick.org"))
+            val content = readResult.getOrThrow()
+            val orgFile = orgParser.parse(content)
+            // Find and update matching headline(s)
+            val updatedHeadlines = orgFile.headlines.map { headline ->
+                if (headline.properties["CREATED"] == createdIso) {
+                    headline.copy(
+                        todoState = "DONE",
+                        closed = endedIso,
+                        properties = headline.properties.toMutableMap().apply { put("ENDED", endedIso) },
+                        body = newDescription ?: headline.body
+                    )
+                } else headline
+            }
+            val updatedFile = orgFile.copy(headlines = updatedHeadlines)
+            val updatedContent = orgWriter.writeFile(updatedFile)
+            fileManager.writeFileToPhoneInbox(PhoneInboxStructure.QUICK_FILE_PATH, updatedContent)
+            return Result.success(Unit)
+        } catch (e: Exception) {
+            return Result.failure(e)
+        }
+    }
+
+    /**
+    * Create org headline for quick task entry
+    */
+    fun createQuickTaskHeadline(
+        title: String,
+        description: String,
+        startedIso: String,
+        togglId: String?,
+        togglProject: String?,
+        pomodoro: Boolean,
+        endedIso: String? = null
+    ): OrgNode.Headline {
+        val props = mutableMapOf<String, String>()
+        props["CREATED"] = startedIso
+        props["STARTED"] = startedIso
+        if (endedIso != null) props["ENDED"] = endedIso
+        if (togglId != null) props["TOGGL_ID"] = togglId
+        if (togglProject != null) props["TOGGL_PROJECT"] = togglProject
+        props["POMODORO"] = pomodoro.toString()
+        return OrgNode.Headline(
+            level = 1,
+            todoState = if (endedIso == null) "IN-PROGRESS" else "DONE",
+            priority = null,
+            title = title,
+            tags = listOf("instant"),
+            scheduled = startedIso,
+            closed = endedIso,
+            properties = props,
+            body = description,
+            children = emptyList()
+        )
     }
 
     /**
@@ -302,6 +406,10 @@ class LocalOrgStorageBackend @Inject constructor(
 
         // Build properties with Emacs-style date format
         val properties = mutableMapOf<String, String>()
+        // Generate unique ID for this entry (required for agenda tracking)
+        properties["ID"] = UUID.randomUUID().toString()
+        // Add source file marker for agenda view
+        properties["SOURCE_FILE"] = "agenda.org"
         // Format: [2026-01-24 Sat 11:40]
         val createdDate = timestamp.format(DateTimeFormatter.ofPattern("[yyyy-MM-dd EEE HH:mm]"))
         properties["CREATED"] = createdDate

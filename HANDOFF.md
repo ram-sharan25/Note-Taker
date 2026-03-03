@@ -2,9 +2,11 @@
 
 ## What Exists
 
-A fully compiling Android app at `/Users/cdavis/github/note-taker/note-taker/` with all features implemented through M35. `./gradlew assembleDebug` and `./gradlew bundleRelease` both build cleanly. The APK installs and launches on the target device (Samsung Galaxy S24 Ultra, Android 16).
+A fully compiling Android app at `/Users/rrimal/Stillness/Development/notes-app/note-taker/` with all features implemented through M44. `./gradlew assembleDebug` and `./gradlew bundleRelease` both build cleanly. The APK installs and launches on the target device (Samsung Galaxy S24 Ultra, Android 16).
 
-See `INDEX.md` for the complete file listing and `IMPLEMENTATION_LOG.md` for build details per milestone.
+**Current Version:** 0.8.0 (Org-Mode Agenda View)
+
+See `IMPLEMENTATION_LOG.md` for complete build details per milestone (M1-M44).
 
 ### Tech Stack
 - AGP 9.0.0, Kotlin 2.2.10 (built-in), Gradle wrapper 9.1.0
@@ -18,6 +20,7 @@ See `INDEX.md` for the complete file listing and `IMPLEMENTATION_LOG.md` for bui
 - **Note input:** Voice-first with continuous listening, keyboard fallback, growing text field
 - **Submission:** Queue-first via Room → immediate push → WorkManager retry on failure
 - **Browse:** Read-only repo browser with markdown rendering via Markwon
+- **Org-Mode Agenda:** Full agenda system for local org-mode files. Supports scheduled/deadline items, recurring tasks, and bucketing (Today, Upcoming, Overdue). Integrated sync worker.
 - **Lock screen:** VoiceInteractionService + side button launch, capture over keyguard
 - **Settings:** Sign out (with OAuth token revocation), digital assistant two-step setup, delete all data
 - **Theme:** Teal/blue/green accents on purple-tinted dark surfaces matching app icon
@@ -54,6 +57,9 @@ Device: `R5CX12TCQ1N` (SM-S928U1, Android 16)
 | `app/src/main/.../ui/screens/AuthScreen.kt` | Two-card auth setup (OAuth + PAT) |
 | `app/src/main/.../ui/viewmodels/AuthViewModel.kt` | OAuth flow + PAT validation |
 | `app/src/main/.../data/auth/AuthManager.kt` | Token storage (EncryptedSharedPreferences + DataStore) |
+| `app/src/main/.../data/repository/AgendaRepository.kt` | Agenda sync, recurring expansion, list building |
+| `app/src/main/.../ui/screens/agenda/AgendaScreen.kt` | Agenda view (bucketed list) |
+| `app/src/main/.../data/orgmode/OrgTimestampParser.kt` | Org-mode timestamp parsing |
 | `app/src/main/.../data/auth/OAuthConfig.kt` | OAuth constants and PKCE helpers |
 | `app/src/main/.../data/api/GitHubApi.kt` | GitHub API endpoints |
 | `app/src/main/.../data/repository/NoteRepository.kt` | Submit notes, fetch topic, browse |

@@ -25,9 +25,9 @@ class StorageConfigManager @Inject constructor(
         val STORAGE_MODE = stringPreferencesKey("storage_mode")
         val LOCAL_FOLDER_URI = stringPreferencesKey("local_folder_uri")
         val SYNC_TO_GITHUB_ENABLED = booleanPreferencesKey("sync_to_github_enabled")
-        val CAPTURE_FOLDER = stringPreferencesKey("capture_folder")
+        val PHONE_INBOX_FOLDER_URI = stringPreferencesKey("phone_inbox_folder_uri")
         val CAPTURE_MODE = stringPreferencesKey("capture_mode")
-        val INBOX_FILE_PATH = stringPreferencesKey("inbox_file_path")
+        val ONBOARDING_COMPLETE = booleanPreferencesKey("onboarding_complete")
     }
 
     /**
@@ -55,10 +55,10 @@ class StorageConfigManager @Inject constructor(
     }
 
     /**
-     * The folder where captured notes are saved (default: "" for root)
+     * URI of the phone inbox folder (contains dictations/, inbox/, sync/ subdirectories)
      */
-    val captureFolder: Flow<String> = context.storageDataStore.data.map { prefs ->
-        prefs[Keys.CAPTURE_FOLDER] ?: ""
+    val phoneInboxFolderUri: Flow<String?> = context.storageDataStore.data.map { prefs ->
+        prefs[Keys.PHONE_INBOX_FOLDER_URI]
     }
 
     /**
@@ -72,10 +72,10 @@ class StorageConfigManager @Inject constructor(
     }
 
     /**
-     * Path to the inbox file (for inbox append mode)
+     * Whether the user has completed the onboarding flow
      */
-    val inboxFilePath: Flow<String> = context.storageDataStore.data.map { prefs ->
-        prefs[Keys.INBOX_FILE_PATH] ?: "inbox.org"
+    val onboardingComplete: Flow<Boolean> = context.storageDataStore.data.map { prefs ->
+        prefs[Keys.ONBOARDING_COMPLETE] ?: false
     }
 
     /**
@@ -118,11 +118,20 @@ class StorageConfigManager @Inject constructor(
     }
 
     /**
-     * Set the capture folder where notes are saved
+     * Set the phone inbox folder URI
      */
-    suspend fun setCaptureFolder(folder: String) {
+    suspend fun setPhoneInboxFolderUri(uri: String) {
         context.storageDataStore.edit { prefs ->
-            prefs[Keys.CAPTURE_FOLDER] = folder
+            prefs[Keys.PHONE_INBOX_FOLDER_URI] = uri
+        }
+    }
+
+    /**
+     * Clear phone inbox folder URI (e.g., when permissions are revoked)
+     */
+    suspend fun clearPhoneInboxFolderUri() {
+        context.storageDataStore.edit { prefs ->
+            prefs.remove(Keys.PHONE_INBOX_FOLDER_URI)
         }
     }
 
@@ -139,11 +148,20 @@ class StorageConfigManager @Inject constructor(
     }
 
     /**
-     * Set the inbox file path
+     * Mark onboarding as complete
      */
-    suspend fun setInboxFilePath(path: String) {
+    suspend fun markOnboardingComplete() {
         context.storageDataStore.edit { prefs ->
-            prefs[Keys.INBOX_FILE_PATH] = path
+            prefs[Keys.ONBOARDING_COMPLETE] = true
+        }
+    }
+
+    /**
+     * Reset onboarding (for debugging/testing)
+     */
+    suspend fun resetOnboarding() {
+        context.storageDataStore.edit { prefs ->
+            prefs[Keys.ONBOARDING_COMPLETE] = false
         }
     }
 }

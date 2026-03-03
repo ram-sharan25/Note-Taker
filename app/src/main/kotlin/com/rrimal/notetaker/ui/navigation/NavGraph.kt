@@ -13,36 +13,44 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.rrimal.notetaker.data.auth.AuthManager
+import com.rrimal.notetaker.data.storage.StorageConfigManager
 import com.rrimal.notetaker.ui.screens.AuthScreen
 import com.rrimal.notetaker.ui.screens.BrowseScreen
-import com.rrimal.notetaker.ui.screens.InboxCaptureScreen
-import com.rrimal.notetaker.ui.screens.NoteInputScreen
+import com.rrimal.notetaker.ui.screens.MainScreen
+import com.rrimal.notetaker.ui.screens.OnboardingScreen
 import com.rrimal.notetaker.ui.screens.SettingsScreen
 import kotlinx.serialization.Serializable
 
+@Serializable object OnboardingRoute
 @Serializable object AuthRoute
-@Serializable object NoteRoute
+@Serializable object MainRoute  // Swipeable main screen (Dictation | Agenda | Inbox)
 @Serializable object SettingsRoute
 @Serializable object BrowseRoute
-@Serializable object InboxCaptureRoute
 
 @Composable
 fun AppNavGraph(
     authManager: AuthManager,
+    storageConfigManager: StorageConfigManager,
     initialRoute: String? = null
 ) {
     // Use null initial to avoid flash — don't render until DataStore emits
     val isAuthenticated by authManager.isAuthenticated.collectAsState(initial = null)
     val hasRepo by authManager.hasRepo.collectAsState(initial = null)
+    val onboardingComplete by storageConfigManager.onboardingComplete.collectAsState(initial = null)
 
     // Wait for DataStore to emit before rendering
-    if (isAuthenticated == null || hasRepo == null) return
+    if (isAuthenticated == null || hasRepo == null || onboardingComplete == null) return
 
     val authed = isAuthenticated == true && hasRepo == true
 
     val navController = rememberNavController()
 
-    val startDestination: Any = if (authed) NoteRoute else AuthRoute
+    // Decision tree for start destination
+    val startDestination: Any = when {
+        onboardingComplete == false -> OnboardingRoute  // First launch - show onboarding
+        authed -> MainRoute                              // GitHub mode configured and authenticated
+        else -> MainRoute                                // Local mode or not configured - go to main
+    }
 
     // Handle initial route from intent extras (e.g. from NoteCaptureActivity)
     LaunchedEffect(initialRoute) {
@@ -54,37 +62,44 @@ fun AppNavGraph(
         }
     }
 
-    // Always return to NoteRoute when app comes back from background
+    // Always return to MainRoute when app comes back from background
     var isFirstStart by rememberSaveable { mutableStateOf(true) }
     LifecycleEventEffect(Lifecycle.Event.ON_START) {
         if (isFirstStart) {
             isFirstStart = false
         } else if (authed) {
-            navController.popBackStack(NoteRoute, inclusive = false)
+            navController.popBackStack(MainRoute, inclusive = false)
         }
     }
 
     NavHost(navController = navController, startDestination = startDestination) {
+        composable<OnboardingRoute> {
+            OnboardingScreen(
+                onComplete = {
+                    navController.navigate(MainRoute) {
+                        popUpTo<OnboardingRoute> { inclusive = true }
+                    }
+                }
+            )
+        }
+
         composable<AuthRoute> {
             AuthScreen(
                 onAuthComplete = {
-                    navController.navigate(NoteRoute) {
+                    navController.navigate(MainRoute) {
                         popUpTo<AuthRoute> { inclusive = true }
                     }
                 }
             )
         }
 
-        composable<NoteRoute> {
-            NoteInputScreen(
+        composable<MainRoute> {
+            MainScreen(
                 onSettingsClick = {
                     navController.navigate(SettingsRoute)
                 },
                 onBrowseClick = {
                     navController.navigate(BrowseRoute)
-                },
-                onInboxCaptureClick = {
-                    navController.navigate(InboxCaptureRoute)
                 }
             )
         }
@@ -104,12 +119,6 @@ fun AppNavGraph(
             BrowseScreen(
                 onBack = { navController.popBackStack() },
                 onSettingsClick = { navController.navigate(SettingsRoute) }
-            )
-        }
-
-        composable<InboxCaptureRoute> {
-            InboxCaptureScreen(
-                onBack = { navController.popBackStack() }
             )
         }
     }
