@@ -8,9 +8,14 @@ This document outlines a comprehensive test strategy for the **Note Taker** Andr
 2. **Agenda View** - Task scheduling, filtering, and TODO state management
 3. **Notes Capture** - Voice/text note input, inbox capture, and storage
 
-**Current State:** ❌ Zero test coverage  
-**Target State:** ✅ ~110 unit tests covering core functionalities  
+**Current State:** ✅ ~110 unit tests covering core functionalities  
+**Target State:** 📈 Expanding to integration and UI tests  
 **Testing Framework:** JUnit 5 + MockK + Kotlin Coroutines Test + Turbine
+
+---
+
+## Master Reference
+See **[Test Strategy & Structure](TEST_STRATEGY.md)** for detailed breakdown of types, architecture, and commands.
 
 ---
 

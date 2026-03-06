@@ -3,7 +3,24 @@
 ## v0.9.0 (Unreleased)
 
 **What's New**
+- **Instant Tasks (Quick Task)** — Create and start tasks directly from the agenda with an elegant bottom sheet UI
+- **Quick.org in Agenda View** — Instant tasks from `quick.org` appear alongside scheduled items in the daily agenda
+- **Pomodoro Auto-HOLD** — Stopping a Pomodoro early automatically sets the task to HOLD
 - **Phone Time Tracking (Phase 1)** — Track work sessions directly from your phone's agenda view
+
+**Instant Task Improvements**
+- **Elegant Bottom Sheet** — Replaced the old dialog with a `ModalBottomSheet`: large "What are you working on?" input, project chips, Pomodoro toggle, and Start button
+- **Expandable Details** — Tap "+ Add details" to reveal an optional description field (collapsed by default to keep the UI minimal)
+- **Fixed Race Condition** — `saveQuickTask()` now calls `syncQuickFile()` instead of `clearAndResyncAll()`, so the task is immediately available for Pomodoro start
+- **Quick.org Always Visible** — `quick.org` tasks are shown in the agenda alongside user-configured org files without needing to add it to settings
+- **Direct File Updates** — State changes on quick.org tasks update the file directly (no JSON sync) since Emacs does not manage `quick.org`
+
+**Pomodoro Improvements**
+- **Auto-HOLD on Early Stop** — Pressing ⏹ during a focus session sets the linked task to HOLD (not on breaks, and not on natural completion)
+
+**Bug Fixes**
+- **UUID Regex Fix** — `isValidSyncFilename()` now accepts lowercase hex UUIDs (`[A-Fa-f0-9]`); Android generates lowercase UUIDs, so the old regex silently rejected ALL TODO state changes via JSON sync
+- **Quick Tasks Skip JSON Sync** — State changes on `quick.org` tasks no longer write `sync/*.json` files (they were orphaned since Emacs doesn't watch `quick.org`)
 
 **Time Tracking Features**
 - **Automatic Time Recording** — When you cycle a task to IN-PROGRESS, app records start time in org properties
@@ -18,6 +35,9 @@
 - Org-mode timestamp format: `[YYYY-MM-DD Day HH:mm]` (e.g., `[2026-03-02 Sun 14:00]`)
 - Active states: IN-PROGRESS, DOING, STARTED trigger time tracking
 - Duration calculation updates in real-time during recomposition
+- `AgendaRepository.syncQuickFile()` — syncs only `quick.org` without touching agenda DB
+- `AgendaRepository.updateQuickTaskStateInFile()` — updates `quick.org` directly using `CREATED` property as stable key
+- `AgendaViewModel.stopPomodoroEarly()` — stops timer and sets task to HOLD (focus sessions only)
 - See `docs/PHONE-TIME-TRACKING-PLAN.md` for full implementation details
 
 ## v0.8.0

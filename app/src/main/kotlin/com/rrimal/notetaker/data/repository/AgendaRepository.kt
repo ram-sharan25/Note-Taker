@@ -136,9 +136,8 @@ class AgendaRepository @Inject constructor(
         // Sync TODO keywords config first
         syncTodoKeywordsConfig()
 
-        // Always include quick.org alongside user-configured agenda files
-        val configuredFiles = agendaConfigManager.agendaFiles.first()
-        val files = (configuredFiles + PhoneInboxStructure.QUICK_FILE_PATH).distinct()
+        // Use the same file list as getAgendaItems so filter searches the same data set
+        val files = listOf(PhoneInboxStructure.AGENDA_FILENAME, PhoneInboxStructure.QUICK_FILE_PATH)
 
         for (filename in files) {
             try {
@@ -256,8 +255,11 @@ class AgendaRepository @Inject constructor(
             // Add "Today" header
             add(AgendaItem.Day(idCounter++, today, today.format(dateFormatter)))
             
-            // Add all items: stateful first, then timed, then untimed
-            addAll(statefulItems.sortedBy { it.title })
+            // Add all items: IN-PROGRESS first, then HOLD/WAITING, then timed, then untimed
+            addAll(statefulItems.sortedWith(compareBy(
+                { if (it.todoState == "IN-PROGRESS") 0 else 1 },
+                { it.title }
+            )))
             addAll(timedItems)
             addAll(untimedItems.sortedBy { it.title })
         }

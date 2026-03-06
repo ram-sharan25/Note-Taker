@@ -194,7 +194,10 @@ sync/757CB098-7BFF-48EF-953D-B4A4D2B3DD9A_TODO_1709467205678.json
      │ 9. Re-parse agenda.org │                      │
      │    syncFileToDatabase()│                      │
      │                        │                      │
-     │ 10. UI updates         │                      │
+     │ 10. Layer Pending Syncs│                      │
+     │     applyPendingSyncs()│                      │
+     │                        │                      │
+     │ 11. UI updates         │                      │
      │     (displays new state)                      │
      │                        │                      │
 ```
@@ -508,7 +511,7 @@ class LocalFileManagerSyncTest {
 
 ### Phase 2: Core Logic (Week 2) - JSON Sync Implementation
 
-**Goal:** Replace direct file writing with JSON sync
+**Goal:** Replace direct file writing with JSON sync and fix status reversion
 
 #### Task 2.1: Rewrite updateTodoState() to Use JSON Sync
 **File:** `app/src/main/kotlin/com/rrimal/notetaker/data/repository/AgendaRepository.kt`
@@ -599,7 +602,24 @@ suspend fun updateTodoState(noteId: Long, newState: String): Result<Unit> = runC
 
 ---
 
-#### Task 2.2: Remove Old File Writing Code
+#### Task 2.2: Implement Pending Sync Layering
+**File:** `app/src/main/kotlin/com/rrimal/notetaker/data/repository/AgendaRepository.kt`
+
+**Description:** To prevent status reversion when Syncthing brings in a stale `agenda.org`, the app must layer its pending JSON changes over the data imported from the file.
+
+**Tasks:**
+- Implement `applyPendingSyncs()` method.
+- Update `syncFileToDatabase()` to call `applyPendingSyncs()` after the import transaction.
+
+**Logic:**
+1. List all files in `sync/`.
+2. Sort by timestamp descending.
+3. For each task ID, keep only the latest state.
+4. Update database records to match the latest pending intent.
+
+---
+
+#### Task 2.3: Remove Old File Writing Code
 **File:** `app/src/main/kotlin/com/rrimal/notetaker/data/repository/AgendaRepository.kt`
 
 **DELETE these methods (no longer needed):**

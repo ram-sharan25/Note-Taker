@@ -62,6 +62,7 @@ android {
         buildConfig = true
     }
 
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -155,6 +156,17 @@ dependencies {
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.turbine)
     testImplementation(kotlin("test"))
+}
+
+// Rename release APK to apk-signed.apk after assembly
+tasks.whenTaskAdded {
+    if (name == "assembleRelease") {
+        doLast {
+            val outDir = layout.buildDirectory.dir("outputs/apk/release").get().asFile
+            File(outDir, "app-release.apk").takeIf { it.exists() }
+                ?.renameTo(File(outDir, "apk-signed.apk"))
+        }
+    }
 }
 
 // ============================================================================
